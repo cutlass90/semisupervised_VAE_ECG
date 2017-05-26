@@ -12,14 +12,14 @@ def unison_shuffled_copies(list_of_arr):
 
 def encode_dataset(path_to_encoded_data):
     paths = tools.find_files(path_to_encoded_data, '*.npy')
-    # paths = paths[:300]
+    paths = paths[:500]
 
     mu = np.vstack([np.load(path).item()['mu'] for path in paths])
     sigma = np.vstack([np.load(path).item()['sigma'] for path in paths])
     y = np.vstack([np.load(path).item()['events'] for path in paths])
     
     #create targets
-    list_of_disease = ['Atrial_PAC'] #Atrial_PAC Ventricular_PVC
+    list_of_disease = ['Ventricular_PVC'] #Atrial_PAC Ventricular_PVC
     y = np.stack([y[:,all_holter_diseases.index(d)] for d in list_of_disease], 1)
     other = (np.sum(y, 1) < 0.5).astype(float)
     y = np.concatenate((y, other[:,None]),1)
@@ -100,7 +100,7 @@ if __name__ == '__main__':
     ####################
     ''' Load Dataset '''
     ####################
-    mu, sigma, y = encode_dataset(path_to_encoded_data='../ECG_encoder/predictions/latent_states_PAC/')
+    mu, sigma, y = encode_dataset(path_to_encoded_data='../ECG_encoder/predictions/latent_states_PVC/')
     x_lab, y_lab, x_ulab, y_ulab, x_valid, y_valid, x_test, y_test = split_data(mu, sigma, y)
     num_lab = y_lab.shape[0]           #Number of labelled examples (total)
 

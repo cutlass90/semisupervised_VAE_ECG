@@ -8,408 +8,408 @@ Original Implementation (Theano): https://github.com/dpkingma/nips14-ssl
 Code By: S. Saemundsson
 '''
 ###
-import prettytensor as pt
+import os
+
 import tensorflow as tf
 import numpy as np
-import utils
 import time
+from tqdm import tqdm
 
-# from neuralnetworks import FullyConnected
-from prettytensor import bookkeeper
+import utils
 
 class GenerativeClassifier(object):
 
-	def __init__(   self,
-					dim_x, dim_z, dim_y,
-					num_examples, num_lab, num_batches,
-					p_x = 'gaussian',
-					q_z = 'gaussian_marg',
-					p_z = 'gaussian_marg',
-					hidden_layers_px = [500],
-					hidden_layers_qz = [500],
-					hidden_layers_qy = [500],
-					nonlin_px = tf.nn.softplus,
-					nonlin_qz = tf.nn.softplus,
-					nonlin_qy = tf.nn.softplus,
-					alpha = 0.1,
-					l2_loss = 0.0	):
+    def __init__(   self,
+                    dim_x, dim_z, dim_y,
+                    num_examples, num_lab, num_batches,
+                    p_x = 'gaussian',
+                    q_z = 'gaussian_marg',
+                    p_z = 'gaussian_marg',
+                    hidden_layers_px = [500],
+                    hidden_layers_qz = [500],
+                    hidden_layers_qy = [500],
+                    nonlin_px = tf.nn.softplus,
+                    nonlin_qz = tf.nn.softplus,
+                    nonlin_qy = tf.nn.softplus,
+                    alpha = 0.1,
+                    l2_loss = 0.0    ):
 
 
-		self.dim_x, self.dim_z, self.dim_y = int(dim_x), int(dim_z), int(dim_y)
+        self.dim_x, self.dim_z, self.dim_y = int(dim_x), int(dim_z), int(dim_y)
 
-		self.distributions = { 		'p_x': 	p_x,			
-									'q_z': 	q_z,			
-									'p_z': 	p_z,            
-									'p_y':	'uniform'	}
+        self.distributions = {         'p_x':     p_x,            
+                                    'q_z':     q_z,            
+                                    'p_z':     p_z,            
+                                    'p_y':    'uniform'    }
 
-		self.num_examples = num_examples
-		self.num_batches = num_batches
-		self.num_lab = num_lab
-		self.num_ulab = self.num_examples - num_lab
+        self.num_examples = num_examples
+        self.num_batches = num_batches
+        self.num_lab = num_lab
+        self.num_ulab = self.num_examples - num_lab
 
-		assert self.num_lab % self.num_batches == 0, '#Labelled % #Batches != 0'
-		assert self.num_ulab % self.num_batches == 0, '#Unlabelled % #Batches != 0'
-		assert self.num_examples % self.num_batches == 0, '#Examples % #Batches != 0'
+        assert self.num_lab % self.num_batches == 0, '#Labelled % #Batches != 0'
+        assert self.num_ulab % self.num_batches == 0, '#Unlabelled % #Batches != 0'
+        assert self.num_examples % self.num_batches == 0, '#Examples % #Batches != 0'
 
-		self.batch_size = self.num_examples // self.num_batches
-		self.num_lab_batch = self.num_lab // self.num_batches
-		self.num_ulab_batch = self.num_ulab // self.num_batches
+        self.batch_size = self.num_examples // self.num_batches
+        self.num_lab_batch = self.num_lab // self.num_batches
+        self.num_ulab_batch = self.num_ulab // self.num_batches
 
-		self.beta = alpha * ( float(self.batch_size) / self.num_lab_batch )
+        self.beta = alpha * ( float(self.batch_size) / self.num_lab_batch )
 
-		''' Create Graph '''
+        ''' Create Graph '''
 
-		self.G = tf.Graph()
+        self.G = tf.Graph()
 
-		with self.G.as_default():
+        with self.G.as_default():
 
-			self.x_labelled_mu 			= tf.placeholder( tf.float32, [None, self.dim_x] )
-			self.x_labelled_lsgms 		= tf.placeholder( tf.float32, [None, self.dim_x] )
-			self.x_unlabelled_mu 		= tf.placeholder( tf.float32, [None, self.dim_x] )
-			self.x_unlabelled_lsgms 	= tf.placeholder( tf.float32, [None, self.dim_x] )
-			self.y_lab      			= tf.placeholder( tf.float32, [None, self.dim_y] )
+            self.x_labelled_mu             = tf.placeholder( tf.float32, [None, self.dim_x] )
+            self.x_labelled_lsgms         = tf.placeholder( tf.float32, [None, self.dim_x] )
+            self.x_unlabelled_mu         = tf.placeholder( tf.float32, [None, self.dim_x] )
+            self.x_unlabelled_lsgms     = tf.placeholder( tf.float32, [None, self.dim_x] )
+            self.y_lab                  = tf.placeholder( tf.float32, [None, self.dim_y] )
 
-			self._objective()
-			self.saver = tf.train.Saver()
-			self.session = tf.Session()
+            self._objective()
+            self.saver = tf.train.Saver()
+            self.session = tf.Session()
 
+            os.makedirs('summary', exist_ok=True)
+            sub_d = len(os.listdir('summary'))
+            self.train_writer = tf.summary.FileWriter(logdir = 'summary/'+str(sub_d))
+            self.merged = tf.summary.merge_all()
 
 
-	def _draw_sample( self, mu, log_sigma_sq ):
 
-		epsilon = tf.random_normal( ( tf.shape( mu ) ), 0, 1 )
-		# sample = tf.add( mu, 
-		# 		 tf.mul(  
-		# 		 tf.exp( 0.5 * log_sigma_sq ), epsilon ) )
-		sample = mu + tf.exp(0.5*log_sigma_sq)*epsilon
+    def _draw_sample( self, mu, log_sigma_sq ):
 
-		return sample
+        epsilon = tf.random_normal( ( tf.shape( mu ) ), 0, 1 )
+        # sample = tf.add( mu, 
+        #          tf.mul(  
+        #          tf.exp( 0.5 * log_sigma_sq ), epsilon ) )
+        sample = mu + tf.exp(0.5*log_sigma_sq)*epsilon
 
-	def _generate_yx( self, x_mu, x_log_sigma_sq, phase = pt.Phase.train, reuse = False ):
+        return sample
 
-		x_sample = self._draw_sample( x_mu, x_log_sigma_sq )
-		with tf.variable_scope('classifier', reuse = reuse):
-			y_logits = self.classifier(inputs=x_sample, hidden_layers=[500],
-				dim_output=self.dim_y, nonlinearity=tf.nn.softplus, reuse=reuse)
+    def _generate_yx( self, x_mu, x_log_sigma_sq, reuse = False ):
 
-		return y_logits, x_sample
+        x_sample = self._draw_sample( x_mu, x_log_sigma_sq )
+        with tf.variable_scope('classifier', reuse = reuse):
+            y_logits = self.classifier(inputs=x_sample, hidden_layers=[500],
+                dim_output=self.dim_y, nonlinearity=tf.nn.softplus, reuse=reuse)
 
-	def _generate_zxy( self, x, y, reuse = False ):
+        return y_logits, x_sample
 
-		with tf.variable_scope('encoder', reuse = reuse):
-			encoder_out = self.encoder(inputs=tf.concat([x, y], axis=1), hidden_layers=[500],
-				dim_output=2*self.dim_z, nonlinearity=tf.nn.softplus, reuse=reuse)
-		z_mu, z_lsgms   = tf.split(encoder_out, 2, axis=1)
-		z_sample        = self._draw_sample( z_mu, z_lsgms )
+    def _generate_zxy( self, x, y, reuse = False ):
 
-		return z_sample, z_mu, z_lsgms 
+        with tf.variable_scope('encoder', reuse = reuse):
+            encoder_out = self.encoder(inputs=tf.concat([x, y], axis=1), hidden_layers=[500],
+                dim_output=2*self.dim_z, nonlinearity=tf.nn.softplus, reuse=reuse)
+        z_mu, z_lsgms   = tf.split(encoder_out, 2, axis=1)
+        z_sample        = self._draw_sample( z_mu, z_lsgms )
 
-	def _generate_xzy( self, z, y, reuse = False ):
+        return z_sample, z_mu, z_lsgms 
 
-		with tf.variable_scope('decoder', reuse = reuse):
-			decoder_out = self.decoder(inputs=tf.concat([z, y], axis=1), hidden_layers=[500],
-				dim_output=2*self.dim_x, nonlinearity=tf.nn.softplus, reuse=reuse)
-		x_recon_mu, x_recon_lsgms   = tf.split(decoder_out, 2, axis=1)
+    def _generate_xzy( self, z, y, reuse = False ):
 
-		return x_recon_mu, x_recon_lsgms
+        with tf.variable_scope('decoder', reuse = reuse):
+            decoder_out = self.decoder(inputs=tf.concat([z, y], axis=1), hidden_layers=[500],
+                dim_output=2*self.dim_x, nonlinearity=tf.nn.softplus, reuse=reuse)
+        x_recon_mu, x_recon_lsgms   = tf.split(decoder_out, 2, axis=1)
 
-	def _objective( self ):
+        return x_recon_mu, x_recon_lsgms
 
-		###############
-		''' L(x,y) ''' 
-		###############
+    def _objective( self ):
 
-		def L(x_recon, x, y, z):
+        ###############
+        ''' L(x,y) ''' 
+        ###############
 
-			if self.distributions['p_z'] == 'gaussian_marg':
+        def L(x_recon, x, y, z):
 
-				log_prior_z = tf.reduce_sum( utils.tf_gaussian_marg( z[1], z[2] ), 1 )
+            if self.distributions['p_z'] == 'gaussian_marg':
 
-			elif self.distributions['p_z'] == 'gaussian':
+                log_prior_z = tf.reduce_sum( utils.tf_gaussian_marg( z[1], z[2] ), 1 )
 
-				log_prior_z = tf.reduce_sum( utils.tf_stdnormal_logpdf( z[0] ), 1 )
+            elif self.distributions['p_z'] == 'gaussian':
 
-			if self.distributions['p_y'] == 'uniform':
+                log_prior_z = tf.reduce_sum( utils.tf_stdnormal_logpdf( z[0] ), 1 )
 
-				y_prior = (1. / self.dim_y) * tf.ones_like( y )
-				log_prior_y = - tf.nn.softmax_cross_entropy_with_logits(logits=y_prior, labels=y )
+            if self.distributions['p_y'] == 'uniform':
 
-			if self.distributions['p_x'] == 'gaussian':
+                y_prior = (1. / self.dim_y) * tf.ones_like( y )
+                log_prior_y = - tf.nn.softmax_cross_entropy_with_logits(logits=y_prior, labels=y )
 
-				log_lik = tf.reduce_sum( utils.tf_normal_logpdf( x, x_recon[0], x_recon[1] ), 1 )
+            if self.distributions['p_x'] == 'gaussian':
 
-			if self.distributions['q_z'] == 'gaussian_marg':
+                log_lik = tf.reduce_sum( utils.tf_normal_logpdf( x, x_recon[0], x_recon[1] ), 1 )
 
-				log_post_z = tf.reduce_sum( utils.tf_gaussian_ent( z[2] ), 1 )
+            if self.distributions['q_z'] == 'gaussian_marg':
 
-			elif self.distributions['q_z'] == 'gaussian':
+                log_post_z = tf.reduce_sum( utils.tf_gaussian_ent( z[2] ), 1 )
 
-				log_post_z = tf.reduce_sum( utils.tf_normal_logpdf( z[0], z[1], z[2] ), 1 )
+            elif self.distributions['q_z'] == 'gaussian':
 
-			_L = log_prior_y + log_lik + log_prior_z - log_post_z
+                log_post_z = tf.reduce_sum( utils.tf_normal_logpdf( z[0], z[1], z[2] ), 1 )
 
-			return  _L
+            _L = log_prior_y + log_lik + log_prior_z - log_post_z
 
-		###########################
-		''' Labelled Datapoints '''
-		###########################
+            return  _L
 
-		self.y_lab_logits, self.x_lab = self._generate_yx( self.x_labelled_mu, self.x_labelled_lsgms )
-		self.z_lab, self.z_lab_mu, self.z_lab_lsgms = self._generate_zxy( self.x_lab, self.y_lab )
-		self.x_recon_lab_mu, self.x_recon_lab_lsgms = self._generate_xzy( self.z_lab, self.y_lab )
+        ###########################
+        ''' Labelled Datapoints '''
+        ###########################
 
-		L_lab = L(  [self.x_recon_lab_mu, self.x_recon_lab_lsgms], self.x_lab, self.y_lab,
-					[self.z_lab, self.z_lab_mu, self.z_lab_lsgms] )
+        self.y_lab_logits, self.x_lab = self._generate_yx( self.x_labelled_mu, self.x_labelled_lsgms )
+        self.z_lab, self.z_lab_mu, self.z_lab_lsgms = self._generate_zxy( self.x_lab, self.y_lab )
+        self.x_recon_lab_mu, self.x_recon_lab_lsgms = self._generate_xzy( self.z_lab, self.y_lab )
 
-		L_lab += - self.beta * tf.nn.softmax_cross_entropy_with_logits(logits=self.y_lab_logits, labels=self.y_lab )
+        L_lab = L(  [self.x_recon_lab_mu, self.x_recon_lab_lsgms], self.x_lab, self.y_lab,
+                    [self.z_lab, self.z_lab_mu, self.z_lab_lsgms] )
 
-		############################
-		''' Unabelled Datapoints '''
-		############################
+        L_lab += - self.beta * tf.nn.softmax_cross_entropy_with_logits(logits=self.y_lab_logits, labels=self.y_lab )
 
-		def one_label_tensor( label ):
+        ############################
+        ''' Unabelled Datapoints '''
+        ############################
 
-			indices = []
-			values = []
-			for i in range(self.num_ulab_batch):
-				indices += [[ i, label ]]
-				values += [ 1. ]
+        def one_label_tensor( label ):
 
-			_y_ulab = tf.sparse_tensor_to_dense( 
-					  tf.SparseTensor( indices=indices, values=values, dense_shape=[ self.num_ulab_batch, self.dim_y ] ), 0.0 )
+            indices = []
+            values = []
+            for i in range(self.num_ulab_batch):
+                indices += [[ i, label ]]
+                values += [ 1. ]
 
-			return _y_ulab
+            _y_ulab = tf.sparse_tensor_to_dense( 
+                      tf.SparseTensor( indices=indices, values=values, dense_shape=[ self.num_ulab_batch, self.dim_y ] ), 0.0 )
 
-		self.y_ulab_logits, self.x_ulab = self._generate_yx( self.x_unlabelled_mu, self.x_unlabelled_lsgms, reuse = True )
+            return _y_ulab
 
-		for label in range(self.dim_y):
+        self.y_ulab_logits, self.x_ulab = self._generate_yx( self.x_unlabelled_mu, self.x_unlabelled_lsgms, reuse = True )
 
-			_y_ulab = one_label_tensor( label )
-			self.z_ulab, self.z_ulab_mu, self.z_ulab_lsgms = self._generate_zxy( self.x_ulab, _y_ulab, reuse = True )
-			self.x_recon_ulab_mu, self.x_recon_ulab_lsgms = self._generate_xzy( self.z_ulab, _y_ulab, reuse = True )
-			_L_ulab =   tf.expand_dims(
-						L(  [self.x_recon_ulab_mu, self.x_recon_ulab_lsgms], self.x_ulab, _y_ulab, 
-							[self.z_ulab, self.z_ulab_mu, self.z_ulab_lsgms]), 1)
+        for label in range(self.dim_y):
 
-			if label == 0: L_ulab = tf.identity( _L_ulab )
-			else: L_ulab = tf.concat([L_ulab, _L_ulab], axis=1)
+            _y_ulab = one_label_tensor( label )
+            self.z_ulab, self.z_ulab_mu, self.z_ulab_lsgms = self._generate_zxy( self.x_ulab, _y_ulab, reuse = True )
+            self.x_recon_ulab_mu, self.x_recon_ulab_lsgms = self._generate_xzy( self.z_ulab, _y_ulab, reuse = True )
+            _L_ulab =   tf.expand_dims(
+                        L(  [self.x_recon_ulab_mu, self.x_recon_ulab_lsgms], self.x_ulab, _y_ulab, 
+                            [self.z_ulab, self.z_ulab_mu, self.z_ulab_lsgms]), 1)
 
-		self.y_ulab = tf.nn.softmax(self.y_ulab_logits)
+            if label == 0: L_ulab = tf.identity( _L_ulab )
+            else: L_ulab = tf.concat([L_ulab, _L_ulab], axis=1)
 
-		U = tf.reduce_sum(self.y_ulab*(L_ulab-tf.log(self.y_ulab)), 1)
+        self.y_ulab = tf.nn.softmax(self.y_ulab_logits)
 
-		########################
-		''' Prior on Weights '''
-		########################
+        U = tf.reduce_sum(self.y_ulab*(L_ulab-tf.log(self.y_ulab)), 1)
 
-		L_weights = 0.
-		_weights = tf.trainable_variables()
-		for w in _weights: 
-			L_weights += tf.reduce_sum( utils.tf_stdnormal_logpdf( w ) )
+        ########################
+        ''' Prior on Weights '''
+        ########################
 
-		##################
-		''' Total Cost '''
-		##################
+        L_weights = 0.
+        _weights = tf.trainable_variables()
+        for w in _weights: 
+            L_weights += tf.reduce_sum( utils.tf_stdnormal_logpdf( w ) )
 
-		L_lab_tot = tf.reduce_sum( L_lab )
-		U_tot = tf.reduce_sum( U )
+        ##################
+        ''' Total Cost '''
+        ##################
 
-		self.cost = ( ( L_lab_tot + U_tot ) * self.num_batches + L_weights ) / ( 
-				- self.num_batches * self.batch_size )
+        L_lab_tot = tf.reduce_sum( L_lab )
+        U_tot = tf.reduce_sum( U )
 
-		##################
-		''' Evaluation '''
-		##################
+        self.cost = ( ( L_lab_tot + U_tot ) * self.num_batches + L_weights ) / ( 
+                - self.num_batches * self.batch_size )
 
-		self.y_test_logits, _ = self._generate_yx( self.x_labelled_mu, self.x_labelled_lsgms, 
-			phase = pt.Phase.test, reuse = True )
-		self.y_test_logits = pt.wrap(self.y_test_logits)
-		self.y_test_pred = self.y_test_logits.softmax( self.y_lab )
+        ##################
+        ''' Evaluation '''
+        ##################
 
-		self.eval_accuracy = self.y_test_pred\
-				.softmax.evaluate_classifier( self.y_lab, phase = pt.Phase.test )
-		self.eval_cross_entropy = self.y_test_pred.loss
-		self.eval_precision, self.eval_recall = self.y_test_pred.softmax\
-				.evaluate_precision_recall( self.y_lab, phase = pt.Phase.test )
+        self.y_test_logits, _ = self._generate_yx(self.x_labelled_mu,
+            self.x_labelled_lsgms, reuse=True)
+        self.y_test_pred = tf.cast(tf.greater(tf.nn.softmax(self.y_test_logits), 0.5),
+            tf.float32)
 
+        y = self.y_lab
+        y_ = self.y_test_pred
+        self.eval_cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
+            labels=self.y_lab, logits=self.y_test_logits))
+        tp = tf.reduce_sum(y*y_)
+        tn = tf.reduce_sum((1-y)*(1-y_))
+        fp = tf.reduce_sum((1-y)*y_)
+        fn = tf.reduce_sum(y*(1-y_))
+        self.eval_accuracy = (tp+tn)/(tp+tn+fp+fn)
+        self.eval_precision = tp/(tp+fp+1e-5)
+        self.eval_recall = tp/(tp+fn+1e-5)
 
-	def train(      self, x_labelled, y, x_unlabelled,
-					epochs,
-					x_valid, y_valid,
-					print_every = 1,
-					learning_rate = 3e-4,
-					beta1 = 0.9,
-					beta2 = 0.999,
-					seed = 31415,
-					stop_iter = 100,
-					save_path = None,
-					load_path = None    ):
+        tf.summary.scalar('eval_accuracy', self.eval_accuracy)
+        tf.summary.scalar('eval_cross_entropy', self.eval_cross_entropy)
+        tf.summary.scalar('eval_precision', self.eval_precision)
+        tf.summary.scalar('eval_recall', self.eval_recall)
 
 
-		''' Session and Summary '''
-		if save_path is None: 
-			self.save_path = 'checkpoints/model_GC_{}-{}-{}_{}.cpkt'.format(
-				self.num_lab,learning_rate,self.batch_size,time.time())
-		else:
-			self.save_path = save_path
 
-		np.random.seed(seed)
-		tf.set_random_seed(seed)
+    def train(      self, x_labelled, y, x_unlabelled,
+                    epochs,
+                    x_valid, y_valid,
+                    print_every = 1,
+                    learning_rate = 3e-4,
+                    beta1 = 0.9,
+                    beta2 = 0.999,
+                    seed = 31415,
+                    stop_iter = 100,
+                    save_path = None,
+                    load_path = None    ):
 
-		with self.G.as_default():
 
-			self.optimiser = tf.train.AdamOptimizer( learning_rate = learning_rate, beta1 = beta1, beta2 = beta2 )
-			self.train_op = self.optimiser.minimize( self.cost )
-			init = tf.global_variables_initializer()
-			self._test_vars = None
-			
-		
-		_data_labelled = np.hstack( [x_labelled, y] )
-		_data_unlabelled = x_unlabelled
-		x_valid_mu, x_valid_lsgms = x_valid[ :, :self.dim_x ], x_valid[ :, self.dim_x:2*self.dim_x ]
+        ''' Session and Summary '''
+        if save_path is None: 
+            self.save_path = 'checkpoints/model_GC_{}-{}-{}_{}.cpkt'.format(
+                self.num_lab,learning_rate,self.batch_size,time.time())
+        else:
+            self.save_path = save_path
 
-		with self.session as sess:
+        np.random.seed(seed)
+        tf.set_random_seed(seed)
 
-			sess.run(init)
-			if load_path == 'default': self.saver.restore( sess, self.save_path )
-			elif load_path is not None: self.saver.restore( sess, load_path )	
+        with self.G.as_default():
 
-			best_eval_accuracy = 0.
-			stop_counter = 0
+            self.optimiser = tf.train.AdamOptimizer( learning_rate = learning_rate, beta1 = beta1, beta2 = beta2 )
+            self.train_op = self.optimiser.minimize( self.cost )
+            init = tf.global_variables_initializer()
+            
+        
+        _data_labelled = np.hstack( [x_labelled, y] )
+        _data_unlabelled = x_unlabelled
+        x_valid_mu, x_valid_lsgms = x_valid[ :, :self.dim_x ], x_valid[ :, self.dim_x:2*self.dim_x ]
 
-			for epoch in range(epochs):
+        with self.session as sess:
 
-				''' Shuffle Data '''
-				np.random.shuffle( _data_labelled )
-				np.random.shuffle( _data_unlabelled )
+            sess.run(init)
+            if load_path == 'default': self.saver.restore( sess, self.save_path )
+            elif load_path is not None: self.saver.restore( sess, load_path )    
 
-				''' Training '''
-				
-				for x_l_mu, x_l_lsgms, y, x_u_mu, x_u_lsgms in utils.feed_numpy_semisupervised(	
-					self.num_lab_batch, self.num_ulab_batch, 
-					_data_labelled[:,:2*self.dim_x], _data_labelled[:,2*self.dim_x:],_data_unlabelled ):
+            best_eval_accuracy = 0.
+            stop_counter = 0
 
-					training_result = sess.run( [self.train_op, self.cost],
-											feed_dict = {	self.x_labelled_mu:			x_l_mu, 	
-															self.x_labelled_lsgms: 		x_l_lsgms,
-															self.y_lab: 				y,
-															self.x_unlabelled_mu: 		x_u_mu,
-															self.x_unlabelled_lsgms: 	x_u_lsgms } )
+            for epoch in tqdm(range(epochs)):
 
-					training_cost = training_result[1]
+                ''' Shuffle Data '''
+                np.random.shuffle( _data_labelled )
+                np.random.shuffle( _data_unlabelled )
 
-				''' Evaluation '''
+                ''' Training '''
+                
+                for x_l_mu, x_l_lsgms, y, x_u_mu, x_u_lsgms in utils.feed_numpy_semisupervised(    
+                    self.num_lab_batch, self.num_ulab_batch, 
+                    _data_labelled[:,:2*self.dim_x], _data_labelled[:,2*self.dim_x:],_data_unlabelled ):
 
-				stop_counter += 1
-
-				if epoch % print_every == 0:
-
-					test_vars = tf.get_collection(bookkeeper.GraphKeys.TEST_VARIABLES)
-					if test_vars:
-						if test_vars != self._test_vars:
-							self._test_vars = list(test_vars)
-							self._test_var_init_op = tf.variables_initializer(test_vars)
-						self._test_var_init_op.run()
-
-
-					eval_accuracy, eval_cross_entropy = \
-						sess.run( [self.eval_accuracy, self.eval_cross_entropy],
-									feed_dict = { 	self.x_labelled_mu: 	x_valid_mu,
-													self.x_labelled_lsgms:	x_valid_lsgms,
-													self.y_lab:				y_valid } )
-
-					if eval_accuracy > best_eval_accuracy:
-
-						best_eval_accuracy = eval_accuracy
-						self.saver.save( sess, self.save_path )
-						stop_counter = 0
-
-					utils.print_metrics( 	epoch+1,
-											['Training', 'cost', training_cost],
-											['Validation', 'accuracy', eval_accuracy],
-											['Validation', 'cross-entropy', eval_cross_entropy] )
-
-				if stop_counter >= stop_iter:
-					print('Stopping GC training')
-					print('No change in validation accuracy for {} iterations'.format(stop_iter))
-					print('Best validation accuracy: {}'.format(best_eval_accuracy))
-					print('Model saved in {}'.format(self.save_path))
-					break
-
-	def predict_labels( self, x_test, y_test ):
-
-		test_vars = tf.get_collection(bookkeeper.GraphKeys.TEST_VARIABLES)
-		tf.variables_initializer(test_vars).run()
-
-		x_test_mu = x_test[:,:self.dim_x]
-		x_test_lsgms = x_test[:,self.dim_x:2*self.dim_x]
-
-		accuracy, cross_entropy, precision, recall = \
-			self.session.run( [self.eval_accuracy, self.eval_cross_entropy, self.eval_precision, self.eval_recall],
-				feed_dict = {self.x_labelled_mu: x_test_mu, self.x_labelled_lsgms: x_test_lsgms, self.y_lab: y_test} )
-
-		utils.print_metrics(	'X',
-								['Test', 'accuracy', accuracy],
-								['Test', 'cross-entropy', cross_entropy],
-								['Test', 'precision', precision],
-								['Test', 'recall', recall] )
-
-
-	def encoder(self, inputs, hidden_layers, dim_output, nonlinearity, reuse):
-		""" Create encoder graph
-
-		Args:
-			hidden_layers: list of integers specifies sizes of hidden layers
-		"""
-		for l in hidden_layers:	
-			inputs = tf.layers.dense(
-				inputs=inputs,
-				units=l,
-				activation=nonlinearity,
-				reuse=reuse)
-		out = tf.layers.dense(
-				inputs=inputs,
-				units=dim_output,
-				activation=None,
-				reuse=reuse)
-		return out
-	
-
-	def decoder(self, inputs, hidden_layers, dim_output, nonlinearity, reuse):
-		""" Create decoder graph
-
-		Args:
-			hidden_layers: list of integers specifies sizes of hidden layers
-		"""
-		for l in hidden_layers:	
-			inputs = tf.layers.dense(
-				inputs=inputs,
-				units=l,
-				activation=nonlinearity,
-				reuse=reuse)
-		out = tf.layers.dense(
-				inputs=inputs,
-				units=dim_output,
-				activation=None,
-				reuse=reuse)
-		return out
-
-
-	def classifier(self, inputs, hidden_layers, dim_output, nonlinearity, reuse):
-		""" Create classifier graph
-
-		Args:
-			hidden_layers: list of integers specifies sizes of hidden layers
-		"""
-		for l in hidden_layers:	
-			inputs = tf.layers.dense(
-				inputs=inputs,
-				units=l,
-				activation=nonlinearity,
-				reuse=reuse)
-		out = tf.layers.dense(
-				inputs=inputs,
-				units=dim_output,
-				activation=None,
-				reuse=reuse)
-		return out
+                    training_result = sess.run( [self.train_op, self.cost],
+                                            feed_dict = {    self.x_labelled_mu:            x_l_mu,     
+                                                            self.x_labelled_lsgms:         x_l_lsgms,
+                                                            self.y_lab:                 y,
+                                                            self.x_unlabelled_mu:         x_u_mu,
+                                                            self.x_unlabelled_lsgms:     x_u_lsgms } )
+
+                    training_cost = training_result[1]
+
+                ''' Evaluation '''
+                stop_counter += 1
+                res = sess.run([self.eval_accuracy, self.eval_cross_entropy,
+                    self.eval_precision, self.eval_recall, self.merged],
+                            feed_dict = {   self.x_labelled_mu:     x_valid_mu,
+                                            self.x_labelled_lsgms:    x_valid_lsgms,
+                                            self.y_lab:                y_valid } )
+                self.train_writer.add_summary(res[-1], epoch)
+                eval_accuracy = res[0]
+
+                if eval_accuracy > best_eval_accuracy:
+                    best_eval_accuracy = eval_accuracy
+                    self.saver.save( sess, self.save_path )
+                    stop_counter = 0
+
+                if stop_counter >= stop_iter:
+                    print('Stopping GC training')
+                    print('No change in validation accuracy for {} iterations'.format(stop_iter))
+                    print('Best validation accuracy: {}'.format(best_eval_accuracy))
+                    print('Model saved in {}'.format(self.save_path))
+                    break
+
+    def predict_labels( self, x_test, y_test ):
+
+        test_vars = tf.get_collection(bookkeeper.GraphKeys.TEST_VARIABLES)
+        tf.variables_initializer(test_vars).run()
+
+        x_test_mu = x_test[:,:self.dim_x]
+        x_test_lsgms = x_test[:,self.dim_x:2*self.dim_x]
+
+        accuracy, cross_entropy, precision, recall = \
+            self.session.run( [self.eval_accuracy, self.eval_cross_entropy, self.eval_precision, self.eval_recall],
+                feed_dict = {self.x_labelled_mu: x_test_mu, self.x_labelled_lsgms: x_test_lsgms, self.y_lab: y_test} )
+
+        utils.print_metrics(    'X',
+                                ['Test', 'accuracy', accuracy],
+                                ['Test', 'cross-entropy', cross_entropy],
+                                ['Test', 'precision', precision],
+                                ['Test', 'recall', recall] )
+
+
+    def encoder(self, inputs, hidden_layers, dim_output, nonlinearity, reuse):
+        """ Create encoder graph
+
+        Args:
+            hidden_layers: list of integers specifies sizes of hidden layers
+        """
+        for l in hidden_layers:    
+            inputs = tf.layers.dense(
+                inputs=inputs,
+                units=l,
+                activation=nonlinearity,
+                reuse=reuse)
+        out = tf.layers.dense(
+                inputs=inputs,
+                units=dim_output,
+                activation=None,
+                reuse=reuse)
+        return out
+    
+
+    def decoder(self, inputs, hidden_layers, dim_output, nonlinearity, reuse):
+        """ Create decoder graph
+
+        Args:
+            hidden_layers: list of integers specifies sizes of hidden layers
+        """
+        for l in hidden_layers:    
+            inputs = tf.layers.dense(
+                inputs=inputs,
+                units=l,
+                activation=nonlinearity,
+                reuse=reuse)
+        out = tf.layers.dense(
+                inputs=inputs,
+                units=dim_output,
+                activation=None,
+                reuse=reuse)
+        return out
+
+
+    def classifier(self, inputs, hidden_layers, dim_output, nonlinearity, reuse):
+        """ Create classifier graph
+
+        Args:
+            hidden_layers: list of integers specifies sizes of hidden layers
+        """
+        for l in hidden_layers:    
+            inputs = tf.layers.dense(
+                inputs=inputs,
+                units=l,
+                activation=nonlinearity,
+                reuse=reuse)
+        out = tf.layers.dense(
+                inputs=inputs,
+                units=dim_output,
+                activation=None,
+                reuse=reuse)
+        return out
