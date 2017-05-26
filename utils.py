@@ -27,6 +27,13 @@ def tf_binary_xentropy(x, y, const = 1e-10):
              (1.0 - x) * tf.log( tf.clip_by_value( 1.0 - y, const, 1.0 ) ) )
 
 def feed_numpy_semisupervised(num_lab_batch, num_ulab_batch, x_lab, y, x_ulab):
+	""" Return batch for training
+
+	Args:
+		num_lab_batch: int, number of labeled samples in each batch
+		num_ulab_batch: int, number of unlabeled samples in each batch
+
+	"""
 
 	size = x_lab.shape[0] + x_ulab.shape[0]
 	batch_size = num_lab_batch + num_ulab_batch
