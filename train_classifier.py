@@ -132,10 +132,10 @@ if __name__ == '__main__':
     ''' Evaluate on Test Set '''
     ############################
 
-    GC_eval = GenerativeClassifier(  dim_x, dim_z, dim_y, num_examples, num_lab, num_batches )
+    # GC_eval = GenerativeClassifier(  dim_x, dim_z, dim_y, num_examples, num_lab, num_batches )
 
-    with GC_eval.session:
-        GC_eval.saver.restore( GC_eval.session, GC.save_path )
-        GC_eval.predict_labels( x_test, y_test )
+    # with GC_eval.session:
+    #     GC_eval.saver.restore( GC_eval.session, GC.save_path )
+    #     GC_eval.predict_labels( x_test, y_test )
     
     

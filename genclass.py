@@ -68,6 +68,7 @@ class GenerativeClassifier(object):
             self.x_unlabelled_mu         = tf.placeholder( tf.float32, [None, self.dim_x] )
             self.x_unlabelled_lsgms     = tf.placeholder( tf.float32, [None, self.dim_x] )
             self.y_lab                  = tf.placeholder( tf.float32, [None, self.dim_y] )
+            self.is_train_mode = tf.placeholder(tf.bool)
 
             self._objective()
             self.saver = tf.train.Saver()
@@ -90,9 +91,11 @@ class GenerativeClassifier(object):
 
         return sample
 
-    def _generate_yx( self, x_mu, x_log_sigma_sq, reuse = False ):
-
-        x_sample = self._draw_sample( x_mu, x_log_sigma_sq )
+    def _generate_yx( self, x_mu, x_log_sigma_sq, reuse=False):
+        x_sample = tf.cond(self.is_train_mode,
+            lambda: self._draw_sample(x_mu, x_log_sigma_sq),
+            lambda: x_mu)
+        
         with tf.variable_scope('classifier', reuse = reuse):
             y_logits = self.classifier(inputs=x_sample, hidden_layers=[500],
                 dim_output=self.dim_y, nonlinearity=tf.nn.softplus, reuse=reuse)
@@ -310,7 +313,8 @@ class GenerativeClassifier(object):
                                                             self.x_labelled_lsgms:         x_l_lsgms,
                                                             self.y_lab:                 y,
                                                             self.x_unlabelled_mu:         x_u_mu,
-                                                            self.x_unlabelled_lsgms:     x_u_lsgms } )
+                                                            self.x_unlabelled_lsgms:     x_u_lsgms,
+                                                            self.is_train_mode: True} )
 
                     training_cost = training_result[1]
 
@@ -320,7 +324,8 @@ class GenerativeClassifier(object):
                     self.eval_precision, self.eval_recall, self.merged],
                             feed_dict = {   self.x_labelled_mu:     x_valid_mu,
                                             self.x_labelled_lsgms:    x_valid_lsgms,
-                                            self.y_lab:                y_valid } )
+                                            self.y_lab:                y_valid,
+                                            self.is_train_mode: False} )
                 self.train_writer.add_summary(res[-1], epoch)
                 eval_accuracy = res[0]
 
@@ -336,23 +341,12 @@ class GenerativeClassifier(object):
                     print('Model saved in {}'.format(self.save_path))
                     break
 
-    def predict_labels( self, x_test, y_test ):
-
-        test_vars = tf.get_collection(bookkeeper.GraphKeys.TEST_VARIABLES)
-        tf.variables_initializer(test_vars).run()
-
-        x_test_mu = x_test[:,:self.dim_x]
-        x_test_lsgms = x_test[:,self.dim_x:2*self.dim_x]
-
-        accuracy, cross_entropy, precision, recall = \
-            self.session.run( [self.eval_accuracy, self.eval_cross_entropy, self.eval_precision, self.eval_recall],
-                feed_dict = {self.x_labelled_mu: x_test_mu, self.x_labelled_lsgms: x_test_lsgms, self.y_lab: y_test} )
-
-        utils.print_metrics(    'X',
-                                ['Test', 'accuracy', accuracy],
-                                ['Test', 'cross-entropy', cross_entropy],
-                                ['Test', 'precision', precision],
-                                ['Test', 'recall', recall] )
+    def predict_labels(self, x):
+        x_test_mu = x[:,:self.dim_x]
+        x_test_lsgms = x[:,self.dim_x:2*self.dim_x]
+        y_ = self.session.run(self.y_test_pred, feed_dict={self.x_labelled_mu: x_test_mu,
+            self.x_labelled_lsgms: x_test_lsgms})
+        return y_
 
 
     def encoder(self, inputs, hidden_layers, dim_output, nonlinearity, reuse):
