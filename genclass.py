@@ -234,8 +234,8 @@ class GenerativeClassifier(object):
         self.y_test_pred = tf.cast(tf.greater(tf.nn.softmax(self.y_test_logits), 0.5),
             tf.float32)
 
-        y = self.y_lab
-        y_ = self.y_test_pred
+        y = self.y_lab[:,0]
+        y_ = self.y_test_pred[:,0]
         self.eval_cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
             labels=self.y_lab, logits=self.y_test_logits))
         tp = tf.reduce_sum(y*y_)
@@ -245,11 +245,13 @@ class GenerativeClassifier(object):
         self.eval_accuracy = (tp+tn)/(tp+tn+fp+fn)
         self.eval_precision = tp/(tp+fp+1e-5)
         self.eval_recall = tp/(tp+fn+1e-5)
+        f1 = 2*self.eval_precision*self.eval_recall/(self.eval_precision+self.eval_recall+1e-5)
 
         tf.summary.scalar('eval_accuracy', self.eval_accuracy)
         tf.summary.scalar('eval_cross_entropy', self.eval_cross_entropy)
         tf.summary.scalar('eval_precision', self.eval_precision)
         tf.summary.scalar('eval_recall', self.eval_recall)
+        tf.summary.scalar('f1 score', f1)
 
 
 
