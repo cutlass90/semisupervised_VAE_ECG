@@ -1,8 +1,78 @@
-from genclass import GenerativeClassifier
+import prettytensor as pt
+import tensorflow as tf
 import numpy as np
 
 from ecg.utils import tools
 from ecg.utils.diseases import all_holter_diseases
+
+logc = np.log(2.*np.pi)
+c = - 0.5 * np.log(2*np.pi)
+
+def tf_normal_logpdf(x, mu, log_sigma_sq):
+
+	return ( - 0.5 * logc - log_sigma_sq / 2. - tf.div( tf.square(x-mu), 2 * tf.exp( log_sigma_sq ) ) )
+
+def tf_stdnormal_logpdf(x):
+
+	return ( - 0.5 * ( logc + tf.square( x ) ) )
+
+def tf_gaussian_ent(log_sigma_sq):
+
+	return ( - 0.5 * ( logc + 1.0 + log_sigma_sq ) )
+
+def tf_gaussian_marg(mu, log_sigma_sq):
+
+	return ( - 0.5 * ( logc + ( tf.square( mu ) + tf.exp( log_sigma_sq ) ) ) )
+
+def tf_binary_xentropy(x, y, const = 1e-10):
+
+    return - ( x * tf.log ( tf.clip_by_value( y, const, 1.0 ) ) + \
+             (1.0 - x) * tf.log( tf.clip_by_value( 1.0 - y, const, 1.0 ) ) )
+
+def feed_numpy_semisupervised(num_lab_batch, num_ulab_batch, x_lab, y, x_ulab):
+	""" Return batch for training
+
+	Args:
+		num_lab_batch: int, number of labeled samples in each batch
+		num_ulab_batch: int, number of unlabeled samples in each batch
+
+	"""
+
+	size = x_lab.shape[0] + x_ulab.shape[0]
+	batch_size = num_lab_batch + num_ulab_batch
+	count = int(size / batch_size)
+
+	dim = x_lab.shape[1]
+
+	for i in range(count):
+		start_lab = i * num_lab_batch
+		end_lab = start_lab + num_lab_batch
+		start_ulab = i * num_ulab_batch
+		end_ulab = start_ulab + num_ulab_batch
+
+		yield [	x_lab[start_lab:end_lab,:dim//2], x_lab[start_lab:end_lab,dim//2:dim], y[start_lab:end_lab],
+				x_ulab[start_ulab:end_ulab,:dim//2], x_ulab[start_ulab:end_ulab,dim//2:dim] ]
+
+def feed_numpy(batch_size, x):
+
+	size = x.shape[0]
+	count = int(size / batch_size)
+
+	dim = x.shape[1]
+
+	for i in range(count):
+		start = i * batch_size
+		end = start + batch_size
+
+		yield x[start:end]
+
+def print_metrics(epoch, *metrics):
+
+	print(25*'-')
+	for metric in metrics: 
+		print('[{}] {} {}: {}'.format(epoch, metric[0],metric[1],metric[2]))
+	print(25*'-')
+
 
 def unison_shuffled_copies(list_of_arr):
     p = np.random.permutation(len(list_of_arr[0]))
@@ -12,14 +82,14 @@ def unison_shuffled_copies(list_of_arr):
 
 def encode_dataset(path_to_encoded_data):
     paths = tools.find_files(path_to_encoded_data, '*.npy')
-    paths = paths[:500]
+    paths = paths[:200]
 
     mu = np.vstack([np.load(path).item()['mu'] for path in paths])
     sigma = np.vstack([np.load(path).item()['sigma'] for path in paths])
     y = np.vstack([np.load(path).item()['events'] for path in paths])
     
     #create targets
-    list_of_disease = ['Ventricular_PVC'] #Atrial_PAC Ventricular_PVC
+    list_of_disease = ['Atrial_PAC'] #Atrial_PAC Ventricular_PVC
     y = np.stack([y[:,all_holter_diseases.index(d)] for d in list_of_disease], 1)
     other = (np.sum(y, 1) < 0.5).astype(float)
     y = np.concatenate((y, other[:,None]),1)
@@ -78,64 +148,3 @@ def split_data(mu, sigma, y):
     # print(y_ulab.sum(0))
 
     return x_lab, y_lab, x_ulab, y_ulab, x_valid, y_valid, x_test, y_test
-
-if __name__ == '__main__':
-    
-    #############################
-    ''' Experiment Parameters '''
-    #############################
-
-    num_batches = 100       #Number of minibatches in a single epoch
-    dim_z = 256              #Dimensionality of latent variable (z)
-    epochs = 1001           #Number of epochs through the full dataset
-    learning_rate = 3e-4    #Learning rate of ADAM
-    alpha = 0.1             #Discriminatory factor (see equation (9) of http://arxiv.org/pdf/1406.5298v2.pdf)
-    seed = 31415            #Seed for RNG
-
-    #Neural Networks parameterising p(x|z,y), q(z|x,y) and q(y|x)
-    hidden_layers_px = [ 500, 500 ]
-    hidden_layers_qz = [ 500, 500 ]
-    hidden_layers_qy = [ 500, 500 ]
-
-    ####################
-    ''' Load Dataset '''
-    ####################
-    mu, sigma, y = encode_dataset(path_to_encoded_data='../ECG_encoder/predictions/latent_states_PVC/')
-    x_lab, y_lab, x_ulab, y_ulab, x_valid, y_valid, x_test, y_test = split_data(mu, sigma, y)
-    num_lab = y_lab.shape[0]           #Number of labelled examples (total)
-
-    dim_x = x_lab.shape[1] / 2
-    dim_y = y_lab.shape[1]
-    num_examples = y_lab.shape[0] + y_ulab.shape[0]
-    
-    ###################################
-    ''' Train Generative Classifier '''
-    ###################################
-
-    GC = GenerativeClassifier(  dim_x, dim_z, dim_y,
-                                num_examples, num_lab, num_batches,
-                                hidden_layers_px    = hidden_layers_px, 
-                                hidden_layers_qz    = hidden_layers_qz, 
-                                hidden_layers_qy    = hidden_layers_qy,
-                                alpha               = alpha )
-
-    GC.train(   x_labelled      = x_lab, y = y_lab, x_unlabelled = x_ulab,
-                x_valid         = x_valid, y_valid = y_valid,
-                epochs          = epochs, 
-                learning_rate   = learning_rate,
-                seed            = seed,
-                print_every     = 10,
-                load_path       = None )
-
-
-    ############################
-    ''' Evaluate on Test Set '''
-    ############################
-
-    # GC_eval = GenerativeClassifier(  dim_x, dim_z, dim_y, num_examples, num_lab, num_batches )
-
-    # with GC_eval.session:
-    #     GC_eval.saver.restore( GC_eval.session, GC.save_path )
-    #     GC_eval.predict_labels( x_test, y_test )
-    
-    

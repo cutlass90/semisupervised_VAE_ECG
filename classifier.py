@@ -15,7 +15,7 @@ import numpy as np
 import time
 from tqdm import tqdm
 
-import utils
+import classifier_tools as c_tools
 
 class GenerativeClassifier(object):
 
@@ -131,11 +131,11 @@ class GenerativeClassifier(object):
 
             if self.distributions['p_z'] == 'gaussian_marg':
 
-                log_prior_z = tf.reduce_sum( utils.tf_gaussian_marg( z[1], z[2] ), 1 )
+                log_prior_z = tf.reduce_sum( c_tools.tf_gaussian_marg( z[1], z[2] ), 1 )
 
             elif self.distributions['p_z'] == 'gaussian':
 
-                log_prior_z = tf.reduce_sum( utils.tf_stdnormal_logpdf( z[0] ), 1 )
+                log_prior_z = tf.reduce_sum( c_tools.tf_stdnormal_logpdf( z[0] ), 1 )
 
             if self.distributions['p_y'] == 'uniform':
 
@@ -144,15 +144,15 @@ class GenerativeClassifier(object):
 
             if self.distributions['p_x'] == 'gaussian':
 
-                log_lik = tf.reduce_sum( utils.tf_normal_logpdf( x, x_recon[0], x_recon[1] ), 1 )
+                log_lik = tf.reduce_sum( c_tools.tf_normal_logpdf( x, x_recon[0], x_recon[1] ), 1 )
 
             if self.distributions['q_z'] == 'gaussian_marg':
 
-                log_post_z = tf.reduce_sum( utils.tf_gaussian_ent( z[2] ), 1 )
+                log_post_z = tf.reduce_sum( c_tools.tf_gaussian_ent( z[2] ), 1 )
 
             elif self.distributions['q_z'] == 'gaussian':
 
-                log_post_z = tf.reduce_sum( utils.tf_normal_logpdf( z[0], z[1], z[2] ), 1 )
+                log_post_z = tf.reduce_sum( c_tools.tf_normal_logpdf( z[0], z[1], z[2] ), 1 )
 
             _L = log_prior_y + log_lik + log_prior_z - log_post_z
 
@@ -213,7 +213,7 @@ class GenerativeClassifier(object):
         L_weights = 0.
         _weights = tf.trainable_variables()
         for w in _weights: 
-            L_weights += tf.reduce_sum( utils.tf_stdnormal_logpdf( w ) )
+            L_weights += tf.reduce_sum( c_tools.tf_stdnormal_logpdf( w ) )
 
         ##################
         ''' Total Cost '''
@@ -306,7 +306,7 @@ class GenerativeClassifier(object):
 
                 ''' Training '''
                 
-                for x_l_mu, x_l_lsgms, y, x_u_mu, x_u_lsgms in utils.feed_numpy_semisupervised(    
+                for x_l_mu, x_l_lsgms, y, x_u_mu, x_u_lsgms in c_tools.feed_numpy_semisupervised(    
                     self.num_lab_batch, self.num_ulab_batch, 
                     _data_labelled[:,:2*self.dim_x], _data_labelled[:,2*self.dim_x:],_data_unlabelled ):
 
