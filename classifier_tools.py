@@ -80,24 +80,24 @@ def unison_shuffled_copies(list_of_arr):
     return res
 
 
-def encode_dataset(path_to_encoded_data):
+def encode_dataset(path_to_encoded_data, required_diseases):
+    # required_diseases: list of string with name of reuiered diseases
     paths = tools.find_files(path_to_encoded_data, '*.npy')
-    paths = paths[:200]
+    paths = paths[:500]
 
     mu = np.vstack([np.load(path).item()['mu'] for path in paths])
     sigma = np.vstack([np.load(path).item()['sigma'] for path in paths])
     y = np.vstack([np.load(path).item()['events'] for path in paths])
     
     #create targets
-    list_of_disease = ['Atrial_PAC'] #Atrial_PAC Ventricular_PVC
-    y = np.stack([y[:,all_holter_diseases.index(d)] for d in list_of_disease], 1)
+    y = np.stack([y[:,all_holter_diseases.index(d)] for d in required_diseases], 1)
     other = (np.sum(y, 1) < 0.5).astype(float)
     y = np.concatenate((y, other[:,None]),1)
 
     assert sum(np.sum(y,1)>1.5) == 0, 'There are some multilabel events'
-    for i in range(len(list_of_disease)+1):
-        if i < len(list_of_disease):
-            print('Find {0} {1}'.format(y.sum(0)[i], list_of_disease[i]))
+    for i in range(len(required_diseases)+1):
+        if i < len(required_diseases):
+            print('Find {0} {1}'.format(y.sum(0)[i], required_diseases[i]))
         else:
             print('Find {0} other diseases'.format(y.sum(0)[i]))
     return mu, sigma, y
@@ -118,33 +118,22 @@ def balance_labels(n_labels, x_list, y_list):
     [print(i.shape, j.shape) for i, j in [y_list, x_list]]
     return x_lab, y_lab, x_list, y_list
 
-def split_data(mu, sigma, y):
+def split_data(mu, sigma, y, n_lab=None, n_unlab=None, n_val=None):
     mu, sigma, y = unison_shuffled_copies([mu, sigma, y])
     x = np.hstack([mu,sigma])
     x_list = [x[y[:,i]==1,:] for i in range(y.shape[1])]
     y_list = [y[y[:,i]==1,:] for i in range(y.shape[1])]
     
-    n = int(input('enter number of labeled data '))
+    n = int(input('enter number of labeled data ')) if n_lab is None else n_lab
     x_lab, y_lab, x_list, y_list = balance_labels(n_labels=n, x_list=x_list,
         y_list=y_list)
 
-    n = int(input('enter number of validation data '))
+    n = int(input('enter number of validation data ')) if n_val is None else n_val
     x_valid, y_valid, x_list, y_list = balance_labels(n_labels=n, x_list=x_list,
         y_list=y_list)
-
-    n = int(input('enter number of test data '))
-    x_test, y_test, x_list, y_list = balance_labels(n_labels=n, x_list=x_list,
-        y_list=y_list)
     
-    n = int(input('enter number of unlabeled data '))
+    n = int(input('enter number of unlabeled data ')) if n_unlab is None else n_unlab
     x_ulab, y_ulab, x_list, y_list = balance_labels(n_labels=n, x_list=x_list,
         y_list=y_list)
 
-    #add unlubeled data
-    # x_test = np.vstack([x_test, x_list[1][:1000,:]])
-    # y_test = np.vstack([y_test, y_list[1][:1000,:]])
-    # print()
-    # print(x_ulab.shape)
-    # print(y_ulab.sum(0))
-
-    return x_lab, y_lab, x_ulab, y_ulab, x_valid, y_valid, x_test, y_test
+    return x_lab, y_lab, x_ulab, y_ulab, x_valid, y_valid

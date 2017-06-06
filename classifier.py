@@ -1,13 +1,3 @@
-###
-'''
-Replication of M2 from http://arxiv.org/abs/1406.5298
-Title: Semi-Supervised Learning with Deep Generative Models
-Authors: Diederik P. Kingma, Danilo J. Rezende, Shakir Mohamed, Max Welling
-Original Implementation (Theano): https://github.com/dpkingma/nips14-ssl
----
-Code By: S. Saemundsson
-'''
-###
 import os
 
 import tensorflow as tf
@@ -32,12 +22,11 @@ class GenerativeClassifier(object):
                     nonlin_qz = tf.nn.softplus,
                     nonlin_qy = tf.nn.softplus,
                     alpha = 0.1,
-                    l2_loss = 0.0    ):
-
+                    l2_loss = 0.0):
 
         self.dim_x, self.dim_z, self.dim_y = int(dim_x), int(dim_z), int(dim_y)
 
-        self.distributions = {         'p_x':     p_x,            
+        self.distributions = {      'p_x':     p_x,            
                                     'q_z':     q_z,            
                                     'p_z':     p_z,            
                                     'p_y':    'uniform'    }
@@ -57,126 +46,157 @@ class GenerativeClassifier(object):
 
         self.beta = alpha * ( float(self.batch_size) / self.num_lab_batch )
 
-        ''' Create Graph '''
+        self.create_graph()
 
-        self.G = tf.Graph()
+        self.create_optimizer_graph(self.cost)
 
-        with self.G.as_default():
-
-            self.x_labelled_mu             = tf.placeholder( tf.float32, [None, self.dim_x] )
-            self.x_labelled_lsgms         = tf.placeholder( tf.float32, [None, self.dim_x] )
-            self.x_unlabelled_mu         = tf.placeholder( tf.float32, [None, self.dim_x] )
-            self.x_unlabelled_lsgms     = tf.placeholder( tf.float32, [None, self.dim_x] )
-            self.y_lab                  = tf.placeholder( tf.float32, [None, self.dim_y] )
-            self.is_train_mode = tf.placeholder(tf.bool)
-
-            self._objective()
-            self.saver = tf.train.Saver()
-            self.session = tf.Session()
-
-            os.makedirs('summary', exist_ok=True)
-            sub_d = len(os.listdir('summary'))
-            self.train_writer = tf.summary.FileWriter(logdir = 'summary/'+str(sub_d))
-            self.merged = tf.summary.merge_all()
+        os.makedirs('summary', exist_ok=True)
+        sub_d = len(os.listdir('summary'))
+        self.train_writer = tf.summary.FileWriter(logdir = 'summary/'+str(sub_d))
+        self.merged = tf.summary.merge_all()
+        
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = True
+        self.sess = tf.Session(config=config)
+        self.sess.run(tf.global_variables_initializer())
+        self.saver = tf.train.Saver(var_list=tf.global_variables(),
+                            max_to_keep = 1000)
 
 
+    # --------------------------------------------------------------------------
+    def __enter__(self):
+        return self
 
+
+    # --------------------------------------------------------------------------
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        tf.reset_default_graph()
+        if self.sess is not None:
+            self.sess.close()
+
+    
+    # --------------------------------------------------------------------------
+    def create_graph(self):
+        print('Creat graph')
+
+        self.x_labelled_mu,\
+        self.x_labelled_lsgms,\
+        self.x_unlabelled_mu,\
+        self.x_unlabelled_lsgms,\
+        self.y_lab,\
+        self.is_train_mode,\
+        self.learning_rate = self.input_graph()
+
+        L_lab = self.labelled_cost()
+
+        U = self.unlabelled_cost()
+
+        self.cost = self.create_cost_graph(L_lab, U)
+
+        self.evaluation_graph()
+
+        print('Done!')
+      
+
+    # --------------------------------------------------------------------------
+    def input_graph(self):
+        print('\tinput_graph')
+        x_labelled_mu = tf.placeholder( tf.float32, [None, self.dim_x] )
+        x_labelled_lsgms = tf.placeholder( tf.float32, [None, self.dim_x] )
+        x_unlabelled_mu = tf.placeholder( tf.float32, [None, self.dim_x] )
+        x_unlabelled_lsgms = tf.placeholder( tf.float32, [None, self.dim_x] )
+        y_lab = tf.placeholder(tf.float32, [None, self.dim_y])
+        is_train_mode = tf.placeholder(tf.bool)
+        learning_rate = tf.placeholder(tf.float32, [])
+        return x_labelled_mu, x_labelled_lsgms, x_unlabelled_mu, x_unlabelled_lsgms,\
+            y_lab, is_train_mode, learning_rate
+
+
+    # --------------------------------------------------------------------------
     def _draw_sample( self, mu, log_sigma_sq ):
-
         epsilon = tf.random_normal( ( tf.shape( mu ) ), 0, 1 )
-        # sample = tf.add( mu, 
-        #          tf.mul(  
-        #          tf.exp( 0.5 * log_sigma_sq ), epsilon ) )
         sample = mu + tf.exp(0.5*log_sigma_sq)*epsilon
-
         return sample
 
+    # --------------------------------------------------------------------------
     def _generate_yx( self, x_mu, x_log_sigma_sq, reuse=False):
         x_sample = tf.cond(self.is_train_mode,
-            lambda: self._draw_sample(x_mu, x_log_sigma_sq),
-            lambda: x_mu)
-        
+            lambda: self._draw_sample(x_mu, x_log_sigma_sq), lambda: x_mu)
         with tf.variable_scope('classifier', reuse = reuse):
             y_logits = self.classifier(inputs=x_sample, hidden_layers=[500],
                 dim_output=self.dim_y, nonlinearity=tf.nn.softplus, reuse=reuse)
-
         return y_logits, x_sample
 
+    # --------------------------------------------------------------------------
     def _generate_zxy( self, x, y, reuse = False ):
-
         with tf.variable_scope('encoder', reuse = reuse):
             encoder_out = self.encoder(inputs=tf.concat([x, y], axis=1), hidden_layers=[500],
                 dim_output=2*self.dim_z, nonlinearity=tf.nn.softplus, reuse=reuse)
         z_mu, z_lsgms   = tf.split(encoder_out, 2, axis=1)
         z_sample        = self._draw_sample( z_mu, z_lsgms )
-
         return z_sample, z_mu, z_lsgms 
 
+    # --------------------------------------------------------------------------
     def _generate_xzy( self, z, y, reuse = False ):
-
         with tf.variable_scope('decoder', reuse = reuse):
             decoder_out = self.decoder(inputs=tf.concat([z, y], axis=1), hidden_layers=[500],
                 dim_output=2*self.dim_x, nonlinearity=tf.nn.softplus, reuse=reuse)
         x_recon_mu, x_recon_lsgms   = tf.split(decoder_out, 2, axis=1)
-
         return x_recon_mu, x_recon_lsgms
 
-    def _objective( self ):
-
-        ###############
+    # --------------------------------------------------------------------------
+    def L(self, x_recon, x, y, z):
         ''' L(x,y) ''' 
-        ###############
+        if self.distributions['p_z'] == 'gaussian_marg':
 
-        def L(x_recon, x, y, z):
+            log_prior_z = tf.reduce_sum( c_tools.tf_gaussian_marg( z[1], z[2] ), 1 )
 
-            if self.distributions['p_z'] == 'gaussian_marg':
+        elif self.distributions['p_z'] == 'gaussian':
 
-                log_prior_z = tf.reduce_sum( c_tools.tf_gaussian_marg( z[1], z[2] ), 1 )
+            log_prior_z = tf.reduce_sum( c_tools.tf_stdnormal_logpdf( z[0] ), 1 )
 
-            elif self.distributions['p_z'] == 'gaussian':
+        if self.distributions['p_y'] == 'uniform':
 
-                log_prior_z = tf.reduce_sum( c_tools.tf_stdnormal_logpdf( z[0] ), 1 )
+            y_prior = (1. / self.dim_y) * tf.ones_like( y )
+            log_prior_y = - tf.nn.softmax_cross_entropy_with_logits(logits=y_prior, labels=y )
 
-            if self.distributions['p_y'] == 'uniform':
+        if self.distributions['p_x'] == 'gaussian':
 
-                y_prior = (1. / self.dim_y) * tf.ones_like( y )
-                log_prior_y = - tf.nn.softmax_cross_entropy_with_logits(logits=y_prior, labels=y )
+            log_lik = tf.reduce_sum( c_tools.tf_normal_logpdf( x, x_recon[0], x_recon[1] ), 1 )
 
-            if self.distributions['p_x'] == 'gaussian':
+        if self.distributions['q_z'] == 'gaussian_marg':
 
-                log_lik = tf.reduce_sum( c_tools.tf_normal_logpdf( x, x_recon[0], x_recon[1] ), 1 )
+            log_post_z = tf.reduce_sum( c_tools.tf_gaussian_ent( z[2] ), 1 )
 
-            if self.distributions['q_z'] == 'gaussian_marg':
+        elif self.distributions['q_z'] == 'gaussian':
 
-                log_post_z = tf.reduce_sum( c_tools.tf_gaussian_ent( z[2] ), 1 )
+            log_post_z = tf.reduce_sum( c_tools.tf_normal_logpdf( z[0], z[1], z[2] ), 1 )
 
-            elif self.distributions['q_z'] == 'gaussian':
+        _L = log_prior_y + log_lik + log_prior_z - log_post_z
 
-                log_post_z = tf.reduce_sum( c_tools.tf_normal_logpdf( z[0], z[1], z[2] ), 1 )
+        return  _L
 
-            _L = log_prior_y + log_lik + log_prior_z - log_post_z
 
-            return  _L
-
-        ###########################
-        ''' Labelled Datapoints '''
-        ###########################
-
+    # --------------------------------------------------------------------------
+    def labelled_cost(self):
+        print('\tlabelled_cost')
         self.y_lab_logits, self.x_lab = self._generate_yx( self.x_labelled_mu, self.x_labelled_lsgms )
         self.z_lab, self.z_lab_mu, self.z_lab_lsgms = self._generate_zxy( self.x_lab, self.y_lab )
         self.x_recon_lab_mu, self.x_recon_lab_lsgms = self._generate_xzy( self.z_lab, self.y_lab )
 
-        L_lab = L(  [self.x_recon_lab_mu, self.x_recon_lab_lsgms], self.x_lab, self.y_lab,
+        L_lab = self.L(  [self.x_recon_lab_mu, self.x_recon_lab_lsgms], self.x_lab, self.y_lab,
                     [self.z_lab, self.z_lab_mu, self.z_lab_lsgms] )
 
-        L_lab += - self.beta * tf.nn.softmax_cross_entropy_with_logits(logits=self.y_lab_logits, labels=self.y_lab )
+        L_lab += - self.beta * tf.nn.softmax_cross_entropy_with_logits(
+            logits=self.y_lab_logits, labels=self.y_lab)
+        return L_lab
 
-        ############################
-        ''' Unabelled Datapoints '''
-        ############################
+
+    # --------------------------------------------------------------------------
+    def unlabelled_cost(self):
+        print('\tunlabelled_cost')
 
         def one_label_tensor( label ):
-
             indices = []
             values = []
             for i in range(self.num_ulab_batch):
@@ -184,19 +204,23 @@ class GenerativeClassifier(object):
                 values += [ 1. ]
 
             _y_ulab = tf.sparse_tensor_to_dense( 
-                      tf.SparseTensor( indices=indices, values=values, dense_shape=[ self.num_ulab_batch, self.dim_y ] ), 0.0 )
-
+                      tf.SparseTensor( indices=indices, values=values,
+                        dense_shape=[ self.num_ulab_batch, self.dim_y ] ), 0.0 )
             return _y_ulab
 
-        self.y_ulab_logits, self.x_ulab = self._generate_yx( self.x_unlabelled_mu, self.x_unlabelled_lsgms, reuse = True )
+        self.y_ulab_logits, self.x_ulab = self._generate_yx(self.x_unlabelled_mu,
+            self.x_unlabelled_lsgms, reuse=True)
 
         for label in range(self.dim_y):
-
             _y_ulab = one_label_tensor( label )
-            self.z_ulab, self.z_ulab_mu, self.z_ulab_lsgms = self._generate_zxy( self.x_ulab, _y_ulab, reuse = True )
-            self.x_recon_ulab_mu, self.x_recon_ulab_lsgms = self._generate_xzy( self.z_ulab, _y_ulab, reuse = True )
-            _L_ulab =   tf.expand_dims(
-                        L(  [self.x_recon_ulab_mu, self.x_recon_ulab_lsgms], self.x_ulab, _y_ulab, 
+            self.z_ulab, self.z_ulab_mu, self.z_ulab_lsgms = self._generate_zxy(
+                self.x_ulab, _y_ulab, reuse=True)
+
+            self.x_recon_ulab_mu, self.x_recon_ulab_lsgms = self._generate_xzy(
+                self.z_ulab, _y_ulab, reuse=True)
+
+            _L_ulab = tf.expand_dims(
+                        self.L([self.x_recon_ulab_mu, self.x_recon_ulab_lsgms], self.x_ulab, _y_ulab, 
                             [self.z_ulab, self.z_ulab_mu, self.z_ulab_lsgms]), 1)
 
             if label == 0: L_ulab = tf.identity( _L_ulab )
@@ -205,29 +229,12 @@ class GenerativeClassifier(object):
         self.y_ulab = tf.nn.softmax(self.y_ulab_logits)
 
         U = tf.reduce_sum(self.y_ulab*(L_ulab-tf.log(self.y_ulab)), 1)
+        return U
 
-        ########################
-        ''' Prior on Weights '''
-        ########################
 
-        L_weights = 0.
-        _weights = tf.trainable_variables()
-        for w in _weights: 
-            L_weights += tf.reduce_sum( c_tools.tf_stdnormal_logpdf( w ) )
-
-        ##################
-        ''' Total Cost '''
-        ##################
-
-        L_lab_tot = tf.reduce_sum( L_lab )
-        U_tot = tf.reduce_sum( U )
-
-        self.cost = ( ( L_lab_tot + U_tot ) * self.num_batches + L_weights ) / ( 
-                - self.num_batches * self.batch_size )
-
-        ##################
-        ''' Evaluation '''
-        ##################
+    # --------------------------------------------------------------------------
+    def evaluation_graph( self ):
+        print('\tevaluation_graph')
 
         self.y_test_logits, _ = self._generate_yx(self.x_labelled_mu,
             self.x_labelled_lsgms, reuse=True)
@@ -254,99 +261,86 @@ class GenerativeClassifier(object):
         tf.summary.scalar('f1 score', f1)
 
 
+    # --------------------------------------------------------------------------
+    def create_cost_graph(self, L_lab, U):
+        print('\tcreate_cost_graph')
+        #Prior on Weights
+        L_weights = 0.
+        _weights = tf.trainable_variables()
+        for w in _weights: 
+            L_weights += tf.reduce_sum( c_tools.tf_stdnormal_logpdf( w ) )
 
-    def train(      self, x_labelled, y, x_unlabelled,
-                    epochs,
-                    x_valid, y_valid,
-                    print_every = 1,
-                    learning_rate = 3e-4,
-                    beta1 = 0.9,
-                    beta2 = 0.999,
-                    seed = 31415,
-                    stop_iter = 100,
-                    save_path = None,
-                    load_path = None    ):
+        #Total Cost
+        L_lab_tot = tf.reduce_sum( L_lab )
+        U_tot = tf.reduce_sum( U )
+        cost = ( ( L_lab_tot + U_tot ) * self.num_batches + L_weights ) / ( 
+                - self.num_batches * self.batch_size )
+        return cost
+
+    # --------------------------------------------------------------------------
+    def create_optimizer_graph(self, cost):
+        print('create_optimizer_graph')
+        with tf.variable_scope('optimizer_graph'):
+            self.optimiser = tf.train.AdamOptimizer(learning_rate=self.learning_rate,
+                beta1=0.9, beta2=0.999)
+            self.train_op = self.optimiser.minimize(cost)
 
 
-        ''' Session and Summary '''
-        if save_path is None: 
-            self.save_path = 'checkpoints/model_GC_{}-{}-{}_{}.cpkt'.format(
-                self.num_lab,learning_rate,self.batch_size,time.time())
-        else:
-            self.save_path = save_path
+    #---------------------------------------------------------------------------  
+    def save_model(self, path = 'beat_detector_model', step = None):
+        p = self.saver.save(self.sess, path, global_step = step)
+        print("\tModel saved in file: %s" % p)
 
-        np.random.seed(seed)
-        tf.set_random_seed(seed)
 
-        with self.G.as_default():
+    #---------------------------------------------------------------------------
+    def load_model(self, path):
+        #path is path to file or path to directory
+        #if path it is path to directory will be load latest model
+        load_path = os.path.splitext(path)[0]\
+        if os.path.isfile(path) else tf.train.latest_checkpoint(path)
+        print('try to load {}'.format(load_path))
+        self.saver.restore(self.sess, load_path)
+        print("Model restored from file %s" % load_path)
 
-            self.optimiser = tf.train.AdamOptimizer( learning_rate = learning_rate, beta1 = beta1, beta2 = beta2 )
-            self.train_op = self.optimiser.minimize( self.cost )
-            init = tf.global_variables_initializer()
-            
+
+    #---------------------------------------------------------------------------  
+    def train(self, x_labelled, y, x_unlabelled, epochs, x_valid, y_valid, learning_rate):            
         
         _data_labelled = np.hstack( [x_labelled, y] )
         _data_unlabelled = x_unlabelled
-        x_valid_mu, x_valid_lsgms = x_valid[ :, :self.dim_x ], x_valid[ :, self.dim_x:2*self.dim_x ]
+        x_valid_mu, x_valid_lsgms = x_valid[:,:self.dim_x], x_valid[:,self.dim_x:2*self.dim_x]
 
-        with self.session as sess:
+        for epoch in tqdm(range(epochs)):
+            ''' Shuffle Data '''
+            np.random.shuffle( _data_labelled )
+            np.random.shuffle( _data_unlabelled )
 
-            sess.run(init)
-            if load_path == 'default': self.saver.restore( sess, self.save_path )
-            elif load_path is not None: self.saver.restore( sess, load_path )    
+            ''' Training '''
+            for x_l_mu, x_l_lsgms, y, x_u_mu, x_u_lsgms in c_tools.feed_numpy_semisupervised(    
+                self.num_lab_batch, self.num_ulab_batch, 
+                _data_labelled[:,:2*self.dim_x], _data_labelled[:,2*self.dim_x:],_data_unlabelled ):
 
-            best_eval_accuracy = 0.
-            stop_counter = 0
-
-            for epoch in tqdm(range(epochs)):
-
-                ''' Shuffle Data '''
-                np.random.shuffle( _data_labelled )
-                np.random.shuffle( _data_unlabelled )
-
-                ''' Training '''
-                
-                for x_l_mu, x_l_lsgms, y, x_u_mu, x_u_lsgms in c_tools.feed_numpy_semisupervised(    
-                    self.num_lab_batch, self.num_ulab_batch, 
-                    _data_labelled[:,:2*self.dim_x], _data_labelled[:,2*self.dim_x:],_data_unlabelled ):
-
-                    training_result = sess.run( [self.train_op, self.cost],
-                                            feed_dict = {    self.x_labelled_mu:            x_l_mu,     
-                                                            self.x_labelled_lsgms:         x_l_lsgms,
-                                                            self.y_lab:                 y,
-                                                            self.x_unlabelled_mu:         x_u_mu,
-                                                            self.x_unlabelled_lsgms:     x_u_lsgms,
-                                                            self.is_train_mode: True} )
-
-                    training_cost = training_result[1]
-
-                ''' Evaluation '''
-                stop_counter += 1
-                res = sess.run([self.eval_accuracy, self.eval_cross_entropy,
-                    self.eval_precision, self.eval_recall, self.merged],
-                            feed_dict = {   self.x_labelled_mu:     x_valid_mu,
-                                            self.x_labelled_lsgms:    x_valid_lsgms,
-                                            self.y_lab:                y_valid,
-                                            self.is_train_mode: False} )
-                self.train_writer.add_summary(res[-1], epoch)
-                eval_accuracy = res[0]
-
-                if eval_accuracy > best_eval_accuracy:
-                    best_eval_accuracy = eval_accuracy
-                    self.saver.save( sess, self.save_path )
-                    stop_counter = 0
-
-                if stop_counter >= stop_iter:
-                    print('Stopping GC training')
-                    print('No change in validation accuracy for {} iterations'.format(stop_iter))
-                    print('Best validation accuracy: {}'.format(best_eval_accuracy))
-                    print('Model saved in {}'.format(self.save_path))
-                    break
+                self.sess.run(self.train_op,
+                        feed_dict={self.x_labelled_mu:x_l_mu,     
+                                    self.x_labelled_lsgms:x_l_lsgms,
+                                    self.y_lab:y,
+                                    self.x_unlabelled_mu:x_u_mu,
+                                    self.x_unlabelled_lsgms:x_u_lsgms,
+                                    self.is_train_mode:True,
+                                    self.learning_rate:learning_rate})
+            
+            ''' Evaluation '''
+            res = self.sess.run(self.merged,
+                        feed_dict = {   self.x_labelled_mu:     x_valid_mu,
+                                        self.x_labelled_lsgms:    x_valid_lsgms,
+                                        self.y_lab:                y_valid,
+                                        self.is_train_mode: False} )
+            self.train_writer.add_summary(res, epoch)
 
     def predict_labels(self, x):
         x_test_mu = x[:,:self.dim_x]
         x_test_lsgms = x[:,self.dim_x:2*self.dim_x]
-        y_ = self.session.run(self.y_test_pred, feed_dict={self.x_labelled_mu: x_test_mu,
+        y_ = self.sess.run(self.y_test_pred, feed_dict={self.x_labelled_mu: x_test_mu,
             self.x_labelled_lsgms: x_test_lsgms})
         return y_
 
@@ -409,3 +403,19 @@ class GenerativeClassifier(object):
                 activation=None,
                 reuse=reuse)
         return out
+
+
+if __name__ == '__main__':
+    GC = GenerativeClassifier(dim_x=128, dim_z=256, dim_y=10,
+                    num_examples=1000, num_lab=100, num_batches=10,
+                    p_x = 'gaussian',
+                    q_z = 'gaussian_marg',
+                    p_z = 'gaussian_marg',
+                    hidden_layers_px = [500],
+                    hidden_layers_qz = [500],
+                    hidden_layers_qy = [500],
+                    nonlin_px = tf.nn.softplus,
+                    nonlin_qz = tf.nn.softplus,
+                    nonlin_qy = tf.nn.softplus,
+                    alpha = 0.1,
+                    l2_loss = 0.0)
