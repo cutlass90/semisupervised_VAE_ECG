@@ -1,6 +1,7 @@
 import prettytensor as pt
 import tensorflow as tf
 import numpy as np
+import random
 
 from ecg.utils import tools
 from ecg.utils.diseases import all_holter_diseases
@@ -83,6 +84,7 @@ def unison_shuffled_copies(list_of_arr):
 def encode_dataset(path_to_encoded_data, required_diseases):
     # required_diseases: list of string with name of reuiered diseases
     paths = tools.find_files(path_to_encoded_data, '*.npy')
+    random.shuffle(paths)
     paths = paths[:500]
 
     mu = np.vstack([np.load(path).item()['mu'] for path in paths])
@@ -102,7 +104,7 @@ def encode_dataset(path_to_encoded_data, required_diseases):
             print('Find {0} other diseases'.format(y.sum(0)[i]))
     return mu, sigma, y
 
-
+"""
 def balance_labels(n_labels, x_list, y_list):
     y_dim = y_list[0].shape[1]
     intervals = [n_labels//y_dim for i in range(y_dim)]
@@ -117,23 +119,42 @@ def balance_labels(n_labels, x_list, y_list):
     print('\nrest ')
     [print(i.shape, j.shape) for i, j in [y_list, x_list]]
     return x_lab, y_lab, x_list, y_list
+"""
 
-def split_data(mu, sigma, y, n_lab=None, n_unlab=None, n_val=None):
+def balance_labels(n_labels, x_list, y_list, required_diseases):
+    # x_list: list of np arrays for each disease, the last item in the list is not disease
+    # y_list: list of np arrays of targets for each disease, the last item in the list is not disease
+    y_dim = y_list[0].shape[1]
+    x_lab = np.empty([0,x_list[0].shape[1]])
+    y_lab = np.empty([0,y_list[0].shape[1]])
+    for i in range(y_dim):
+        x_lab = np.vstack([x_lab, x_list[i][:n_labels,:]])
+        x_list[i] = x_list[i][n_labels:,:]
+        y_lab = np.vstack([y_lab, y_list[i][:n_labels,:]])
+        y_list[i] = y_list[i][n_labels:,:]
+    print('\nRest')
+    [print(required_diseases[i], y.shape[0]) for i,y in enumerate(y_list[:-1])]
+    return x_lab, y_lab, x_list, y_list
+
+def split_data(mu, sigma, y, required_diseases, n_lab=None, n_unlab=None, n_val=None):
     mu, sigma, y = unison_shuffled_copies([mu, sigma, y])
     x = np.hstack([mu,sigma])
     x_list = [x[y[:,i]==1,:] for i in range(y.shape[1])]
     y_list = [y[y[:,i]==1,:] for i in range(y.shape[1])]
     
-    n = int(input('enter number of labeled data ')) if n_lab is None else n_lab
+    n = int(input('enter number of samples of each disease for labeled data '))\
+        if n_lab is None else n_lab
     x_lab, y_lab, x_list, y_list = balance_labels(n_labels=n, x_list=x_list,
-        y_list=y_list)
+        y_list=y_list, required_diseases=required_diseases)
 
-    n = int(input('enter number of validation data ')) if n_val is None else n_val
+    n = int(input('enter number of samples of each disease for validation data '))\
+        if n_val is None else n_val
     x_valid, y_valid, x_list, y_list = balance_labels(n_labels=n, x_list=x_list,
-        y_list=y_list)
+        y_list=y_list, required_diseases=required_diseases)
     
-    n = int(input('enter number of unlabeled data ')) if n_unlab is None else n_unlab
+    n = int(input('enter number of samples of each disease for unlabeled data '))\
+        if n_unlab is None else n_unlab
     x_ulab, y_ulab, x_list, y_list = balance_labels(n_labels=n, x_list=x_list,
-        y_list=y_list)
+        y_list=y_list, required_diseases=required_diseases)
 
     return x_lab, y_lab, x_ulab, y_ulab, x_valid, y_valid

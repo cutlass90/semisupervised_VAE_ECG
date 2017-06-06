@@ -12,6 +12,7 @@ class GenerativeClassifier(object):
     def __init__(   self,
                     dim_x, dim_z, dim_y,
                     num_examples, num_lab, num_batches,
+                    required_diseases,
                     p_x = 'gaussian',
                     q_z = 'gaussian_marg',
                     p_z = 'gaussian_marg',
@@ -35,6 +36,7 @@ class GenerativeClassifier(object):
         self.num_batches = num_batches
         self.num_lab = num_lab
         self.num_ulab = self.num_examples - num_lab
+        self.required_diseases = required_diseases
 
         assert self.num_lab % self.num_batches == 0, '#Labelled % #Batches != 0'
         assert self.num_ulab % self.num_batches == 0, '#Unlabelled % #Batches != 0'
@@ -236,29 +238,26 @@ class GenerativeClassifier(object):
     def evaluation_graph( self ):
         print('\tevaluation_graph')
 
-        self.y_test_logits, _ = self._generate_yx(self.x_labelled_mu,
+        logits, _ = self._generate_yx(self.x_labelled_mu,
             self.x_labelled_lsgms, reuse=True)
-        self.y_test_pred = tf.cast(tf.greater(tf.nn.softmax(self.y_test_logits), 0.5),
-            tf.float32)
+        self.pred = tf.cast(tf.greater(tf.nn.softmax(logits), 0.5), tf.float32)
 
-        y = self.y_lab[:,0]
-        y_ = self.y_test_pred[:,0]
-        self.eval_cross_entropy = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
-            labels=self.y_lab, logits=self.y_test_logits))
-        tp = tf.reduce_sum(y*y_)
-        tn = tf.reduce_sum((1-y)*(1-y_))
-        fp = tf.reduce_sum((1-y)*y_)
-        fn = tf.reduce_sum(y*(1-y_))
-        self.eval_accuracy = (tp+tn)/(tp+tn+fp+fn)
-        self.eval_precision = tp/(tp+fp+1e-5)
-        self.eval_recall = tp/(tp+fn+1e-5)
-        f1 = 2*self.eval_precision*self.eval_recall/(self.eval_precision+self.eval_recall+1e-5)
+        for i, disease in enumerate(self.required_diseases):
+            y = self.y_lab[:,i]
+            y_ = self.pred[:,i]
+            tp = tf.reduce_sum(y*y_)
+            tn = tf.reduce_sum((1-y)*(1-y_))
+            fp = tf.reduce_sum((1-y)*y_)
+            fn = tf.reduce_sum(y*(1-y_))
+            # self.eval_accuracy = (tp+tn)/(tp+tn+fp+fn)
+            pr = tp/(tp+fp+1e-5)
+            re = tp/(tp+fn+1e-5)
+            f1 = 2*pr*re/(pr+re+1e-5)
 
-        tf.summary.scalar('eval_accuracy', self.eval_accuracy)
-        tf.summary.scalar('eval_cross_entropy', self.eval_cross_entropy)
-        tf.summary.scalar('eval_precision', self.eval_precision)
-        tf.summary.scalar('eval_recall', self.eval_recall)
-        tf.summary.scalar('f1 score', f1)
+            # tf.summary.scalar('eval_accuracy', self.eval_accuracy)
+            tf.summary.scalar(disease+' precision', pr)
+            tf.summary.scalar(disease+' recall', re)
+            tf.summary.scalar(disease+' f1 score', f1)
 
 
     # --------------------------------------------------------------------------
@@ -340,7 +339,7 @@ class GenerativeClassifier(object):
     def predict_labels(self, x):
         x_test_mu = x[:,:self.dim_x]
         x_test_lsgms = x[:,self.dim_x:2*self.dim_x]
-        y_ = self.sess.run(self.y_test_pred, feed_dict={self.x_labelled_mu: x_test_mu,
+        y_ = self.sess.run(self.pred, feed_dict={self.x_labelled_mu: x_test_mu,
             self.x_labelled_lsgms: x_test_lsgms})
         return y_
 

@@ -8,7 +8,7 @@ from classifier_parameters import parameters as PARAM
 ''' Load Dataset '''
 ####################
 mu, sigma, y = c_tools.encode_dataset(PARAM['path_to_encoded_data'], PARAM['required_diseases'])
-x_lab, y_lab, x_ulab, y_ulab, x_valid, y_valid = c_tools.split_data(mu, sigma, y)
+x_lab, y_lab, x_ulab, y_ulab, x_valid, y_valid = c_tools.split_data(mu, sigma, y, PARAM['required_diseases'])
 num_lab = y_lab.shape[0]           #Number of labelled examples (total)
 
 dim_x = x_lab.shape[1] / 2
@@ -25,6 +25,7 @@ GC = GenerativeClassifier(
     num_examples=num_examples,
     num_lab=num_lab,
     num_batches=PARAM['num_batches'],
+    required_diseases=PARAM['required_diseases'],
     hidden_layers_px=PARAM['hidden_layers_px'], 
     hidden_layers_qz=PARAM['hidden_layers_qz'], 
     hidden_layers_qy=PARAM['hidden_layers_qy'],
