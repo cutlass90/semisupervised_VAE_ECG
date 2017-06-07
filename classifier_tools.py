@@ -85,7 +85,7 @@ def encode_dataset(path_to_encoded_data, required_diseases):
     # required_diseases: list of string with name of reuiered diseases
     paths = tools.find_files(path_to_encoded_data, '*.npy')
     random.shuffle(paths)
-    paths = paths[:500]
+    paths = paths[:2000]
 
     mu = np.vstack([np.load(path).item()['mu'] for path in paths])
     sigma = np.vstack([np.load(path).item()['sigma'] for path in paths])
@@ -96,6 +96,8 @@ def encode_dataset(path_to_encoded_data, required_diseases):
     other = (np.sum(y, 1) < 0.5).astype(float)
     y = np.concatenate((y, other[:,None]),1)
 
+    inds = np.sum(y,1)<1.5
+    y, mu, sigma = y[inds, :], mu[inds, :], sigma[inds, :]
     assert sum(np.sum(y,1)>1.5) == 0, 'There are some multilabel events'
     for i in range(len(required_diseases)+1):
         if i < len(required_diseases):

@@ -11,6 +11,7 @@ parameters = {
     "hidden_layers_qy":[ 500, 500 ],
 
     'path_to_encoded_data':'../ECG_encoder/predictions/',
-    'required_diseases':['Ventricular_PVC', 'Atrial_PAC']
+    'required_diseases':['Ventricular_PVC', 'Atrial_PAC', 'Ventricular_Trigeminy',
+        'Atrial_Trigeminy']
     }
 
