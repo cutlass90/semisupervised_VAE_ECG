@@ -10,7 +10,8 @@ logc = np.log(2.*np.pi)
 c = - 0.5 * np.log(2*np.pi)
 
 def tf_normal_logpdf(x, mu, log_sigma_sq):
-
+    # log of normal distribution
+    # reconstaction loss
 	return ( - 0.5 * logc - log_sigma_sq / 2. - tf.div( tf.square(x-mu), 2 * tf.exp( log_sigma_sq ) ) )
 
 def tf_stdnormal_logpdf(x):
@@ -18,11 +19,11 @@ def tf_stdnormal_logpdf(x):
 	return ( - 0.5 * ( logc + tf.square( x ) ) )
 
 def tf_gaussian_ent(log_sigma_sq):
-
+    #gausian entropy
 	return ( - 0.5 * ( logc + 1.0 + log_sigma_sq ) )
 
 def tf_gaussian_marg(mu, log_sigma_sq):
-
+    # it is log of normal distribution
 	return ( - 0.5 * ( logc + ( tf.square( mu ) + tf.exp( log_sigma_sq ) ) ) )
 
 def tf_binary_xentropy(x, y, const = 1e-10):
@@ -85,7 +86,7 @@ def encode_dataset(path_to_encoded_data, required_diseases):
     # required_diseases: list of string with name of reuiered diseases
     paths = tools.find_files(path_to_encoded_data, '*.npy')
     random.shuffle(paths)
-    paths = paths[:2000]
+    paths = paths[:500]
 
     mu = np.vstack([np.load(path).item()['mu'] for path in paths])
     sigma = np.vstack([np.load(path).item()['sigma'] for path in paths])
@@ -138,25 +139,48 @@ def balance_labels(n_labels, x_list, y_list, required_diseases):
     [print(required_diseases[i], y.shape[0]) for i,y in enumerate(y_list[:-1])]
     return x_lab, y_lab, x_list, y_list
 
+# def split_data(mu, sigma, y, required_diseases, n_lab=None, n_unlab=None, n_val=None):
+#     mu, sigma, y = unison_shuffled_copies([mu, sigma, y])
+#     x = np.hstack([mu,sigma])
+#     x_list = [x[y[:,i]==1,:] for i in range(y.shape[1])]
+#     y_list = [y[y[:,i]==1,:] for i in range(y.shape[1])]
+    
+#     n = int(input('enter number of samples of each disease for labeled data '))\
+#         if n_lab is None else n_lab
+#     x_lab, y_lab, x_list, y_list = balance_labels(n_labels=n, x_list=x_list,
+#         y_list=y_list, required_diseases=required_diseases)
+
+#     n = int(input('enter number of samples of each disease for validation data '))\
+#         if n_val is None else n_val
+#     x_valid, y_valid, x_list, y_list = balance_labels(n_labels=n, x_list=x_list,
+#         y_list=y_list, required_diseases=required_diseases)
+    
+#     n = int(input('enter number of samples of each disease for unlabeled data '))\
+#         if n_unlab is None else n_unlab
+#     x_ulab, y_ulab, x_list, y_list = balance_labels(n_labels=n, x_list=x_list,
+#         y_list=y_list, required_diseases=required_diseases)
+
+#     return x_lab, y_lab, x_ulab, y_ulab, x_valid, y_valid
+
+def resume(y, required_diseases):
+    print('Found {0} samples'.format(y.shape[0]))
+    for i in range(len(required_diseases)+1):
+        if i < len(required_diseases):
+            print('Find {0} {1}'.format(y.sum(0)[i], required_diseases[i]))
+        else:
+            print('Find {0} other diseases'.format(y.sum(0)[i]))
+    print()
+
 def split_data(mu, sigma, y, required_diseases, n_lab=None, n_unlab=None, n_val=None):
     mu, sigma, y = unison_shuffled_copies([mu, sigma, y])
     x = np.hstack([mu,sigma])
-    x_list = [x[y[:,i]==1,:] for i in range(y.shape[1])]
-    y_list = [y[y[:,i]==1,:] for i in range(y.shape[1])]
-    
-    n = int(input('enter number of samples of each disease for labeled data '))\
-        if n_lab is None else n_lab
-    x_lab, y_lab, x_list, y_list = balance_labels(n_labels=n, x_list=x_list,
-        y_list=y_list, required_diseases=required_diseases)
 
-    n = int(input('enter number of samples of each disease for validation data '))\
-        if n_val is None else n_val
-    x_valid, y_valid, x_list, y_list = balance_labels(n_labels=n, x_list=x_list,
-        y_list=y_list, required_diseases=required_diseases)
-    
-    n = int(input('enter number of samples of each disease for unlabeled data '))\
-        if n_unlab is None else n_unlab
-    x_ulab, y_ulab, x_list, y_list = balance_labels(n_labels=n, x_list=x_list,
-        y_list=y_list, required_diseases=required_diseases)
+    x_lab, y_lab = x[:10000,...], y[:10000,...]
+    resume(y_lab, required_diseases)
+    x_valid, y_valid = x[10000:20000,...], y[10000:20000,...]
+    resume(y_valid, required_diseases)
+    n = y.shape[0]//100*100
+    x_ulab, y_ulab = x[20000:n,...], y[20000:n,...]
+    resume(y_ulab, required_diseases)
 
     return x_lab, y_lab, x_ulab, y_ulab, x_valid, y_valid

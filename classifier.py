@@ -189,7 +189,8 @@ class GenerativeClassifier(object):
     def unlabelled_cost(self):
         print('\tunlabelled_cost')
 
-        def one_label_tensor( label ):
+        def one_label_tensor(label):
+            ''' Create zero matrix shape [num_ulab_batch, dim_y] and ones in column label'''
             indices = []
             values = []
             for i in range(self.num_ulab_batch):
@@ -261,11 +262,22 @@ class GenerativeClassifier(object):
             L_weights += tf.reduce_sum( c_tools.tf_stdnormal_logpdf( w ) )
 
         #Total Cost
-        L_lab_tot = tf.reduce_sum( L_lab )
-        U_tot = tf.reduce_sum( U )
-        cost = ( ( L_lab_tot + U_tot ) * self.num_batches + L_weights ) / ( 
-                - self.num_batches * self.batch_size )
+        L_lab_tot = -tf.reduce_sum(L_lab)/self.batch_size
+        U_tot = -tf.reduce_sum(U)/self.batch_size
+        L_weights = -L_weights/self.num_batches/self.batch_size
+        # cost = ( ( L_lab_tot + U_tot ) * self.num_batches + L_weights ) / ( 
+        #         - self.num_batches * self.batch_size )
+        cost = L_lab_tot + U_tot + L_weights
+        tf.summary.scalar('labelled loss', L_lab_tot)
+        tf.summary.scalar('L2 loss', L_weights)
+        
         return cost
+
+    def balance_loss(self, class_balance):
+        pass
+        # self.y_ulab = tf.nn.softmax(self.y_ulab_logits)
+
+
 
     # --------------------------------------------------------------------------
     def create_optimizer_graph(self, cost):
