@@ -13,6 +13,7 @@ class GenerativeClassifier(object):
                     dim_x, dim_z, dim_y,
                     num_examples, num_lab, num_batches,
                     required_diseases,
+                    labels_distribution,
                     p_x = 'gaussian',
                     q_z = 'gaussian_marg',
                     p_z = 'gaussian_marg',
@@ -30,13 +31,14 @@ class GenerativeClassifier(object):
         self.distributions = {      'p_x':     p_x,            
                                     'q_z':     q_z,            
                                     'p_z':     p_z,            
-                                    'p_y':    'uniform'    }
+                                    'p_y':    'custom'    }
 
         self.num_examples = num_examples
         self.num_batches = num_batches
         self.num_lab = num_lab
         self.num_ulab = self.num_examples - num_lab
         self.required_diseases = required_diseases
+        self.labels_distribution = labels_distribution
 
         assert self.num_lab % self.num_batches == 0, '#Labelled % #Batches != 0'
         assert self.num_ulab % self.num_batches == 0, '#Unlabelled % #Batches != 0'
@@ -47,6 +49,7 @@ class GenerativeClassifier(object):
         self.num_ulab_batch = self.num_ulab // self.num_batches
 
         self.beta = alpha * ( float(self.batch_size) / self.num_lab_batch )
+        self.list_train_summary, self.list_test_summary = [], []
 
         self.create_graph()
 
@@ -54,8 +57,10 @@ class GenerativeClassifier(object):
 
         os.makedirs('summary', exist_ok=True)
         sub_d = len(os.listdir('summary'))
-        self.train_writer = tf.summary.FileWriter(logdir = 'summary/'+str(sub_d))
-        self.merged = tf.summary.merge_all()
+        self.train_writer = tf.summary.FileWriter(logdir='summary/'+str(sub_d)+'/train')
+        self.test_writer = tf.summary.FileWriter(logdir='summary/'+str(sub_d)+'/test')
+        self.train_summary = tf.summary.merge(self.list_train_summary)
+        self.test_summary = tf.summary.merge(self.list_test_summary)
         
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
@@ -93,7 +98,10 @@ class GenerativeClassifier(object):
 
         U = self.unlabelled_cost()
 
-        self.cost = self.create_cost_graph(L_lab, U)
+        unbalance_loss = self.unbalance_loss()
+        unbalance_loss = 0
+
+        self.cost = self.create_cost_graph(L_lab, U, unbalance_loss)
 
         self.evaluation_graph()
 
@@ -148,24 +156,32 @@ class GenerativeClassifier(object):
 
     # --------------------------------------------------------------------------
     def L(self, x_recon, x, y, z):
+        x_recon_mu, x_recon_lsgms = x_recon
+        z_, z_mu, z_lsgms = z
+
         ''' L(x,y) ''' 
         if self.distributions['p_z'] == 'gaussian_marg':
-            log_prior_z = tf.reduce_sum( c_tools.tf_gaussian_marg( z[1], z[2] ), 1 )
+            log_prior_z = tf.reduce_sum( c_tools.tf_gaussian_marg(z_mu, z_lsgms), 1 )
         # elif self.distributions['p_z'] == 'gaussian':
         #     log_prior_z = tf.reduce_sum( c_tools.tf_stdnormal_logpdf( z[0] ), 1 )
 
         if self.distributions['p_y'] == 'uniform':
-            y_prior = (1. / self.dim_y) * tf.ones_like( y )
-            log_prior_y = - tf.nn.softmax_cross_entropy_with_logits(logits=y_prior, labels=y )
+            y_prior = (1. / self.dim_y) * tf.ones_like(y)
+        else:
+            y_prior = self.labels_distribution * tf.ones_like(y)
+        log_prior_y = -tf.nn.softmax_cross_entropy_with_logits(logits=y_prior, labels=y)
 
-        log_lik = tf.reduce_sum(c_tools.tf_normal_logpdf(x, x_recon[0], x_recon[1]), 1)
+
+
+        log_lik = tf.reduce_sum(c_tools.tf_normal_logpdf(x, x_recon_mu, x_recon_lsgms), 1)
 
         if self.distributions['q_z'] == 'gaussian_marg':
-            log_post_z = tf.reduce_sum( c_tools.tf_gaussian_ent( z[2] ), 1 )
+            log_post_z = tf.reduce_sum(c_tools.tf_gaussian_ent(z_lsgms), 1)
         # elif self.distributions['q_z'] == 'gaussian':
         #     log_post_z = tf.reduce_sum( c_tools.tf_normal_logpdf( z[0], z[1], z[2] ), 1 )
+        print(log_prior_y, log_lik, log_prior_z, log_post_z)
 
-        _L = log_prior_y + log_lik + log_prior_z - log_post_z
+        _L = 2*log_prior_y + log_lik + log_prior_z - log_post_z
 
         return  _L
 
@@ -230,30 +246,29 @@ class GenerativeClassifier(object):
     def evaluation_graph( self ):
         print('\tevaluation_graph')
 
-        logits, _ = self._generate_yx(self.x_labelled_mu,
-            self.x_labelled_lsgms, reuse=True)
-        self.pred = tf.cast(tf.greater(tf.nn.softmax(logits), 0.5), tf.float32)
+        self.pred = tf.cast(tf.greater(tf.nn.softmax(self.y_lab_logits), 0.5), tf.float32)
 
+        
+        preds = tf.reduce_max(self.y_lab_logits, axis=1)
+        preds = tf.cast(tf.equal(logits, tf.expand_dims(pred, 1)), tf.float32)
         for i, disease in enumerate(self.required_diseases):
             y = self.y_lab[:,i]
-            y_ = self.pred[:,i]
+            y_ = preds[:,i]
             tp = tf.reduce_sum(y*y_)
             tn = tf.reduce_sum((1-y)*(1-y_))
             fp = tf.reduce_sum((1-y)*y_)
             fn = tf.reduce_sum(y*(1-y_))
-            # self.eval_accuracy = (tp+tn)/(tp+tn+fp+fn)
             pr = tp/(tp+fp+1e-5)
             re = tp/(tp+fn+1e-5)
             f1 = 2*pr*re/(pr+re+1e-5)
 
-            # tf.summary.scalar('eval_accuracy', self.eval_accuracy)
-            tf.summary.scalar(disease+' precision', pr)
-            tf.summary.scalar(disease+' recall', re)
-            tf.summary.scalar(disease+' f1 score', f1)
+            self.list_test_summary.append(tf.summary.scalar(disease+' precision', pr))
+            self.list_test_summary.append(tf.summary.scalar(disease+' recall', re))
+            self.list_test_summary.append(tf.summary.scalar(disease+' f1 score', f1))
 
 
     # --------------------------------------------------------------------------
-    def create_cost_graph(self, L_lab, U):
+    def create_cost_graph(self, L_lab, U, unbalance_loss):
         print('\tcreate_cost_graph')
         #Prior on Weights
         L_weights = 0.
@@ -267,16 +282,27 @@ class GenerativeClassifier(object):
         L_weights = -L_weights/self.num_batches/self.batch_size
         # cost = ( ( L_lab_tot + U_tot ) * self.num_batches + L_weights ) / ( 
         #         - self.num_batches * self.batch_size )
-        cost = L_lab_tot + U_tot + L_weights
-        tf.summary.scalar('labelled loss', L_lab_tot)
-        tf.summary.scalar('L2 loss', L_weights)
+        cost = L_lab_tot + U_tot + L_weights + 10*unbalance_loss
+
+        self.list_train_summary.append(tf.summary.scalar('labelled loss', L_lab_tot))
+        self.list_train_summary.append(tf.summary.scalar('unlabelled loss', U_tot))
+        self.list_train_summary.append(tf.summary.scalar('L2 loss', L_weights))
+        self.list_train_summary.append(tf.summary.scalar('unbalance loss', unbalance_loss))
         
         return cost
 
-    def balance_loss(self, class_balance):
-        pass
-        # self.y_ulab = tf.nn.softmax(self.y_ulab_logits)
-
+    # --------------------------------------------------------------------------
+    def unbalance_loss(self):
+        print('\tunbalance_loss')
+        q = tf.nn.softmax(tf.reduce_sum(self.y_ulab, 0))
+        print(q)
+        cross_entropy = -tf.reduce_sum(tf.log(q+1e-5)*self.labels_distribution)
+        
+        self.list_train_summary.append(tf.summary.histogram(
+            'predicted label distribution', tf.argmax(self.y_ulab, 1)))
+        self.list_train_summary.append(tf.summary.histogram(
+            'true label distribution', tf.argmax(self.y_lab, 1)))
+        return cross_entropy
 
 
     # --------------------------------------------------------------------------
@@ -312,6 +338,7 @@ class GenerativeClassifier(object):
         _data_unlabelled = x_unlabelled
         x_valid_mu, x_valid_lsgms = x_valid[:,:self.dim_x], x_valid[:,self.dim_x:2*self.dim_x]
 
+        train_it = 0
         for epoch in tqdm(range(epochs)):
             ''' Shuffle Data '''
             np.random.shuffle( _data_labelled )
@@ -322,7 +349,7 @@ class GenerativeClassifier(object):
                 self.num_lab_batch, self.num_ulab_batch, 
                 _data_labelled[:,:2*self.dim_x], _data_labelled[:,2*self.dim_x:],_data_unlabelled ):
 
-                self.sess.run(self.train_op,
+                _, s = self.sess.run([self.train_op, self.train_summary],
                         feed_dict={self.x_labelled_mu:x_l_mu,     
                                     self.x_labelled_lsgms:x_l_lsgms,
                                     self.y_lab:y,
@@ -330,14 +357,16 @@ class GenerativeClassifier(object):
                                     self.x_unlabelled_lsgms:x_u_lsgms,
                                     self.is_train_mode:True,
                                     self.learning_rate:learning_rate})
+                self.train_writer.add_summary(s, train_it)
+                train_it += 1
             
             ''' Evaluation '''
-            res = self.sess.run(self.merged,
+            s = self.sess.run(self.test_summary,
                         feed_dict = {   self.x_labelled_mu:     x_valid_mu,
                                         self.x_labelled_lsgms:    x_valid_lsgms,
                                         self.y_lab:                y_valid,
                                         self.is_train_mode: False} )
-            self.train_writer.add_summary(res, epoch)
+            self.test_writer.add_summary(s, epoch)
 
     def predict_labels(self, x):
         x_test_mu = x[:,:self.dim_x]

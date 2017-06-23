@@ -11,8 +11,10 @@ parameters = {
     "hidden_layers_qy":[ 500, 500 ],
 
     'path_to_encoded_data':'../ECG_encoder/predictions/latent_states_PVC/',
+    'labels_distribution':[0.02, 0.98],
     'required_diseases':['Ventricular_PVC']
     # 'required_diseases':['Ventricular_PVC', 'Atrial_PAC', 'Ventricular_Trigeminy',
     #     'Atrial_Trigeminy']
+
     }
 

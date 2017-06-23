@@ -26,6 +26,7 @@ GC = GenerativeClassifier(
     num_lab=num_lab,
     num_batches=PARAM['num_batches'],
     required_diseases=PARAM['required_diseases'],
+    labels_distribution=PARAM['labels_distribution'],
     hidden_layers_px=PARAM['hidden_layers_px'], 
     hidden_layers_qz=PARAM['hidden_layers_qz'], 
     hidden_layers_qy=PARAM['hidden_layers_qy'],
