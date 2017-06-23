@@ -250,7 +250,7 @@ class GenerativeClassifier(object):
 
         
         preds = tf.reduce_max(self.y_lab_logits, axis=1)
-        preds = tf.cast(tf.equal(logits, tf.expand_dims(pred, 1)), tf.float32)
+        preds = tf.cast(tf.equal(self.y_lab_logits, tf.expand_dims(preds, 1)), tf.float32)
         for i, disease in enumerate(self.required_diseases):
             y = self.y_lab[:,i]
             y_ = preds[:,i]

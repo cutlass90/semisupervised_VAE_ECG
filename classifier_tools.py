@@ -176,11 +176,16 @@ def split_data(mu, sigma, y, required_diseases, n_lab=None, n_unlab=None, n_val=
     x = np.hstack([mu,sigma])
 
     x_lab, y_lab = x[:10000,...], y[:10000,...]
+    print('\n**********labeled data')
     resume(y_lab, required_diseases)
+
     x_valid, y_valid = x[10000:20000,...], y[10000:20000,...]
+    print('\n**********validation data')
     resume(y_valid, required_diseases)
+
     n = y.shape[0]//100*100
     x_ulab, y_ulab = x[20000:n,...], y[20000:n,...]
+    print('\n**********unlabeled data')
     resume(y_ulab, required_diseases)
 
     return x_lab, y_lab, x_ulab, y_ulab, x_valid, y_valid
